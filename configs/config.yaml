@@ -1,0 +1,50 @@
+# rocway 默认配置。所有字段均可被 ROCWAY_<SECTION>_<KEY> 环境变量覆盖。
+
+server:
+  addr: ":8080"   # HTTP 监听地址
+  mode: "debug"   # gin mode: debug | release | test
+
+database:
+  write:
+    host: "127.0.0.1"
+    port: 3306
+    user: "root"
+    password: "123456"
+    dbname: "rocway"
+  read:
+    # - host: "127.0.0.1"
+    #   port: 3306s
+    #   user: "readonly"
+    #   password: "readonly"
+    #   dbname: "rocway"
+  max_open_conns: 50
+  max_idle_conns: 10
+
+cache:
+  addr: "127.0.0.1:6379"
+  password: ""
+  db: 0
+  prefix: "rocway:"
+
+auth:
+  jwt_secret: "change-me-in-production"
+  access_ttl_sec: 3600
+  refresh_ttl_sec: 604800
+  model_path: "configs/rbac_model.conf"
+  policy_path: "configs/rbac_policy.csv"
+
+storage:
+  driver: "local"   # local | oss
+  local_dir: "storage"
+  public_base: "/storage"
+  # OSS 字段（仅 driver=oss 时生效）
+  endpoint: ""
+  bucket: ""
+  access_key: ""
+  secret_key: ""
+
+logger:
+  level: "info"
+  dir: "logs"
+  max_mb: 100
+  backup: 7

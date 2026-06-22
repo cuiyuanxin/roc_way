@@ -1,0 +1,7 @@
+# Casbin policy: p, sub, obj, act
+# g, user, role
+p, admin, *, *
+p, alice, user, read
+p, alice, user, write
+
+g, alice, admin

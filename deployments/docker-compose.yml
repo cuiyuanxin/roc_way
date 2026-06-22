@@ -1,0 +1,56 @@
+version: "3.9"
+
+services:
+  rocway:
+    build:
+      context: ..
+      dockerfile: build/package/Dockerfile
+    container_name: rocway
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      ROCWAY_DATABASE_WRITE_HOST: mysql
+      ROCWAY_DATABASE_WRITE_PORT: "3306"
+      ROCWAY_DATABASE_WRITE_USER: root
+      ROCWAY_DATABASE_WRITE_PASSWORD: root
+      ROCWAY_DATABASE_WRITE_DBNAME: rocway
+      ROCWAY_CACHE_ADDR: redis:6379
+      ROCWAY_LOGGER_LEVEL: info
+    ports:
+      - "8080:8080"
+    volumes:
+      - ../logs:/app/logs
+      - ../storage:/app/storage
+
+  mysql:
+    image: mysql:8
+    container_name: rocway-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: rocway
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-uroot", "-proot"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7
+    container_name: rocway-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  mysql_data:

@@ -1,0 +1,22 @@
+# 编辑器
+.idea/
+.vscode/
+*.swp
+
+# 构建产物
+/bin/
+/dist/
+/storage/
+/logs/
+
+# Go
+*.test
+*.out
+coverage.*
+
+# 不提交 vendor（依据 project_rules.md）
+/vendor/
+
+# 环境变量
+.env
+.env.local
