@@ -107,6 +107,34 @@
 - [x] `docs/quickstart.md` 让新用户 5 分钟跑通 admin
 - [x] `docs/architecture.md` 包含模块依赖图
 
+## Swagger/OpenAPI 文档
+
+- [x] `swag` 命令已安装（`go install github.com/swaggo/swag/cmd/swag@latest`）
+- [x] `make swagger` 命令已添加到 Makefile
+- [x] `make swagger` 执行后 `api/docs/swagger.json` 存在且非空
+- [x] `go.mod` 包含 `github.com/swaggo/swag` `github.com/swaggo/gin-swagger` `github.com/swaggo/files`
+- [x] `api/docs/` 目录存在（swag 输出目录）
+- [x] `api/response/response.go` 定义 `Response<T>` 含 `code/message/data/request_id`
+- [x] `api/response/response.go` 定义 `PaginatedResponse<T>` 含 `list/total/page/page_size`
+- [x] `controller/health.go` handler 有 `@Summary` `@Tags` `@Router`
+- [x] `controller/auth.go` 登录/注册/刷新/登出 handler 有完整注释
+- [x] `controller/user.go` CRUD handler 有 `@Param` `@Success` `@Failure` `@Router`
+- [x] `controller/sse.go` / `controller/ws.go` 有 `@Summary` `@Tags` `@Router`
+- [x] `api/router.go` 注册 `/swagger/*` 路由
+- [x] `ginSwagger.WrapHandler(swaggerFiles.Handler)` 已挂载
+- [ ] `make run` 后 `GET /swagger/index.html` 返回 200
+- [x] `api/docs/swagger.json` 包含 `/healthz`、`/api/v1/users`、认证接口、SSE/WebSocket 接口
+- [x] `make wire && make swagger` 串行执行无报错
+
+## GitHooks 本地质量门禁
+
+- [x] `githooks/pre-commit` 脚本存在且可执行
+- [x] `githooks/commit-msg` 脚本存在且可执行
+- [x] `pre-commit` 执行 `gofmt -l .`、`go vet ./...`、`go test ./... -short`
+- [x] `commit-msg` 支持校验 Conventional Commits 格式（feat/fix/docs/chore/refactor/test/perf 等）
+- [x] `make install-hooks` 可将钩子链接到 `.git/hooks/`
+- [x] `git commit` 时钩子自动触发，检查失败则 commit 被拒绝
+
 ## 质量门禁
 
 - [x] `go vet ./...` 无 warning

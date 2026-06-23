@@ -24,6 +24,7 @@
 - **NEW** 统一错误码体系
 - **NEW** CLI 脚手架（**简单子命令优先使用标准库 `flag`，复杂子命令才使用 Cobra**）
 - **NEW** `Makefile`、`Dockerfile`（`build/package/`）、`docker-compose.yml`（`deployments/`）
+- **NEW** Swagger/OpenAPI 3.0 文档（swag 自动生成 + Swagger UI）
 
 ## 设计原则（强制约束）
 
@@ -75,6 +76,7 @@
   - 配置模板 → `configs/`
   - 部署编排 → `deployments/`
   - 脚手架模板 → `assets/scaffold/`
+  - Git 钩子 → `githooks/`
 
 ## ADDED Requirements
 
@@ -267,6 +269,45 @@
 - **WHEN** 执行 `docker compose up`
 - **THEN** rocway + MySQL + Redis 三个容器全部 healthy
 
+### Requirement: Swagger/OpenAPI 3.0 文档
+
+框架 SHALL 提供自动化 API 文档生成与 Swagger UI，文档与代码保持同步。
+
+#### Scenario: 自动生成文档
+- **WHEN** 执行 `make swagger`
+- **THEN** 在 `api/docs/swagger.json` 生成完整的 OpenAPI 3.0 规范
+- **AND** 包含所有已注册路由的 path、method、parameters、responses
+
+#### Scenario: Swagger UI 访问
+- **WHEN** 浏览器访问 `GET /swagger/index.html`
+- **THEN** 返回 Swagger UI 页面，左上角显示 "roc_way API"
+
+#### Scenario: API 调试
+- **WHEN** 在 Swagger UI 中点击接口 "Try it out" → "Execute"
+- **THEN** 发起真实请求并在响应体中显示结果
+
+#### Scenario: 路由变更自动更新
+- **WHEN** 修改 controller 后重新 `make swagger`
+- **THEN** `api/docs/swagger.json` 同步更新，Swagger UI 反映最新接口
+
+### Requirement: Git Hooks 本地质量门禁
+
+框架 SHALL 提供 Git 本地钩子（`githooks/` 目录），确保提交代码前自动执行质量检查。
+
+#### Scenario: pre-commit 钩子
+- **WHEN** 开发者执行 `git commit`
+- **THEN** pre-commit 钩子自动执行：`go fmt ./...`、`go vet ./...`、`go test ./...`
+- **AND** 任一检查失败则 commit 被拒绝
+
+#### Scenario: commit-msg 钩子
+- **WHEN** 开发者编写 commit message
+- **THEN** commit-msg 钩子校验 message 格式（支持 Conventional Commits：`feat:` `fix:` `docs:` `chore:` `refactor:` `test:` `perf:`）
+- **AND** 格式不符则 commit 被拒绝
+
+#### Scenario: 钩子安装
+- **WHEN** 新开发者克隆仓库后首次 setup
+- **THEN** 执行 `make install-hooks` 或 `ln -sf ../../githooks/pre-commit .git/hooks/` 将钩子链接到 `.git/hooks/`
+
 ## MODIFIED Requirements
 
 无（首次构建）。
@@ -297,6 +338,8 @@
 | CLI（顶层 / 复杂） | [`github.com/spf13/cobra`](https://github.com/spf13/cobra) | `cmd/rocway-cli` | 复杂命令树首选 |
 | CLI（简单） | **标准库 `flag`** | `cmd/rocway-cli/cmd/new.go` 等 | Go 内置，避免引入依赖 |
 | 脚手架模板 | — | `assets/scaffold/` | 文本模板，使用 `text/template` |
+| API 文档 | [`github.com/swaggo/swag`](https://github.com/swaggo/swag) + [`github.com/swaggo/gin-swagger`](https://github.com/swaggo/gin-swagger) | `api/docs/`, `internal/app/admin/controller/` | Go AST 解析注释生成 OpenAPI 3.0，gin 集成事实标准 |
+| Swagger UI | [`github.com/swaggo/files`](https://github.com/swaggo/files) | `web/static/swagger/` | swaggo 官方 UI 静态资源 |
 
 > 备注：依据 `project_rules.md`，以上 `internal/pkg/*` 为**框架内部库**（不允许外部 import）。当某模块需要被外部项目使用（例如 CLI 单独分发）时，相应子包提升到 `pkg/`。
 

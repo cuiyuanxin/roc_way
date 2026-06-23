@@ -38,7 +38,7 @@ var (
 
 // Error 携带 Code 与附加 cause。
 type Error struct {
-	C   Code
+	C     Code
 	Cause error
 }
 

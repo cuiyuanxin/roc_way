@@ -183,6 +183,62 @@
   - [x] 7.3.1 `docs/quickstart.md`：5 分钟跑通 admin
   - [x] 7.3.2 `docs/architecture.md`：模块依赖图
 
+## Phase 8 — Swagger/OpenAPI 文档 (P8)
+
+> 补充 Phase：添加自动化 API 文档生成与 Swagger UI
+
+- [x] **Task 8.1 [P]**: 安装 swag 工具链
+  - [x] 8.1.1 `go install github.com/swaggo/swag/cmd/swag@latest`
+  - [x] 8.1.2 Makefile 添加 `swagger: swag init -g cmd/rocway/main.go -o api/docs`
+  - [x] 8.1.3 创建 `api/docs/` 目录（swag 输出目录）
+  - [x] 8.1.4 首次 `make swagger` 确认 `api/docs/swagger.json` 生成
+
+- [x] **Task 8.2 [P]**: 引入 Swagger 依赖
+  - [x] 8.2.1 `go get github.com/swaggo/swag` `github.com/swaggo/gin-swagger` `github.com/swaggo/files`
+  - [x] 8.2.2 `go mod tidy` 确认无冲突
+
+- [x] **Task 8.3 [P]**: 定义统一响应模型
+  - [x] 8.3.1 创建 `api/response/response.go`
+  - [x] 8.3.2 定义 `Response<T>` 含 `code/message/data/request_id`
+  - [x] 8.3.3 定义 `PaginatedResponse<T>` 含 `list/total/page/page_size`
+
+- [x] **Task 8.4**: 控制器添加 swag 注释
+  - [x] 8.4.1 `controller/health.go`：添加 `@Summary` `@Tags` `@Router`
+  - [x] 8.4.2 `controller/auth.go`：登录/注册/刷新/登出全部 handler 添加完整注释
+  - [x] 8.4.3 `controller/user.go`：CRUD 全部 handler 添加 `@Param` `@Success` `@Failure` `@Router`
+  - [x] 8.4.4 `controller/sse.go` / `controller/ws.go`：添加 `@Summary` `@Tags` `@Router`
+
+- [x] **Task 8.5**: 集成 Swagger UI
+  - [x] 8.5.1 创建 `api/router.go` 注册 `/swagger/*` 路由
+  - [x] 8.5.2 使用 `ginSwagger.WrapHandler(swaggerFiles.Handler)` 挂载 UI
+  - [x] 8.5.3 `admin.NewApp(d Deps)` 中调用 `api.RegisterRoutes(e)`
+
+## Phase 9 — GitHooks 本地质量门禁 (P9)
+
+> 补充 Phase：添加 Git 本地钩子（githooks/ 目录），符合 project_rules.md 约束
+
+- [x] **Task 9.1 [P]**: 创建 GitHooks 目录与脚本
+  - [x] 9.1.1 创建 `githooks/pre-commit` 脚本
+  - [x] 9.1.2 创建 `githooks/commit-msg` 脚本
+  - [x] 9.1.3 脚本添加可执行权限（`chmod +x`）
+
+- [x] **Task 9.2 [P]**: 实现 pre-commit 钩子
+  - [x] 9.2.1 检查 Go 代码格式：`gofmt -l .`
+  - [x] 9.2.2 执行静态分析：`go vet ./...`
+  - [x] 9.2.3 运行单元测试：`go test ./... -short`
+  - [x] 9.2.4 全部通过才允许 commit，否则打印错误并 exit 1
+
+- [x] **Task 9.3 [P]**: 实现 commit-msg 钩子
+  - [x] 9.3.1 读取 `$1`（commit message 文件）
+  - [x] 9.3.2 校验格式：支持 `feat:` `fix:` `docs:` `chore:` `refactor:` `test:` `perf:` `style:` `ci:` `build:` `revert:`
+  - [x] 9.3.3 可选：要求 `scope(optional): subject` 格式
+  - [x] 9.3.4 格式不符拒绝提交并给出提示
+
+- [x] **Task 9.4**: 配置钩子安装
+  - [x] 9.4.1 Makefile 添加 `install-hooks` 目标
+  - [x] 9.4.2 `install-hooks` 将 `githooks/*` 链接到 `.git/hooks/`
+  - [x] 9.4.3 文档说明：克隆后首次 `make install-hooks`
+
 ---
 
 ## Task Dependencies
@@ -204,6 +260,8 @@
                                                └─▶ 5.3 ◀── 5.4
                                                └─▶ 6.1, 6.2, 6.3, 6.4, 6.5
                                                └─▶ 7.1, 7.2, 7.3
+                                               └─▶ 8.1, 8.2, 8.3 ──▶ 8.4 ──▶ 8.5
+                                               └─▶ 9.1, 9.2, 9.3 ──▶ 9.4
 ```
 
 - Phase 1 内 `[P]` 任务彼此独立，可并行。
@@ -213,3 +271,5 @@
 - Phase 5 依赖 Phase 1~4。
 - Phase 6 与 Phase 5 可并行。
 - Phase 7 依赖所有 Phase。
+- Phase 8 依赖 Phase 5（需要 admin 应用已注册路由）
+- Phase 9 可独立执行，无外部依赖

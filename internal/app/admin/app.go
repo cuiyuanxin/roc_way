@@ -4,6 +4,7 @@ package admin
 import (
 	"github.com/gin-gonic/gin"
 
+	"github.com/cuiyuanxin/roc_way/api"
 	"github.com/cuiyuanxin/roc_way/internal/app/admin/controller"
 	"github.com/cuiyuanxin/roc_way/internal/app/admin/model"
 	"github.com/cuiyuanxin/roc_way/internal/pkg/auth"
@@ -38,17 +39,20 @@ func NewApp(d Deps) *App {
 	e.Use(middleware.CORS(middleware.CORSOptions{}))
 	e.Use(middleware.RateLimit(100, 200))
 
+	// Swagger UI
+	api.RegisterRoutes(e)
+
 	controller.NewHealth().Register(e)
 	controller.NewAuth(d.Auth).Register(e)
 
-	api := e.Group("/")
-	api.Use(middleware.JWT(d.Auth))
-	api.Use(middleware.CSRF())
-	controller.NewUser(d.DB).Register(api)
-	controller.NewRealtime(d.Hub).Register(api)
+	apiGroup := e.Group("/")
+	apiGroup.Use(middleware.JWT(d.Auth))
+	apiGroup.Use(middleware.CSRF())
+	controller.NewUser(d.DB).Register(apiGroup)
+	controller.NewRealtime(d.Hub).Register(apiGroup)
 
 	// 受 RBAC 保护的示例
-	api.GET("/api/v1/admin",
+	apiGroup.GET("/api/v1/admin",
 		d.Enforcer.RequirePermission("api/v1/admin", "GET"),
 		func(c *gin.Context) { controller.WriteOK(c, gin.H{"role": "admin"}) },
 	)

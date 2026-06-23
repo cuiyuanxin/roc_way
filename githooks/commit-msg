@@ -1,0 +1,53 @@
+#!/bin/bash
+# commit-msg hook for roc_way
+# 校验 commit message 符合 Conventional Commits 格式
+
+set -e
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+NC='\033[0m'
+
+COMMIT_MSG_FILE=$1
+COMMIT_MSG=$(cat "$COMMIT_MSG_FILE")
+
+# Conventional Commits 格式: type(scope): subject
+# type: feat, fix, docs, chore, refactor, test, perf, style, ci, build, revert
+# scope: 可选，用括号包裹
+# subject: 简短描述，以小写字母开头，不含句号
+
+# 支持的类型
+VALID_TYPES="feat|fix|docs|style|refactor|test|perf|ci|build|chore|revert|merge"
+
+# Conventional Commits 正则
+PATTERN="^($VALID_TYPES)(\([a-zA-Z0-9_-]+\))?!?: [a-z][a-z0-9 ].*$"
+
+if ! echo "$COMMIT_MSG" | grep -qE "$PATTERN"; then
+    echo -e "${RED}ERROR: Commit message does not follow Conventional Commits format.${NC}"
+    echo -e "${RED}Expected format: <type>(<scope>): <subject>${NC}"
+    echo ""
+    echo "Valid types:"
+    echo "  feat     - 新功能"
+    echo "  fix      - Bug 修复"
+    echo "  docs     - 文档更新"
+    echo "  style    - 代码格式（不影响功能）"
+    echo "  refactor - 重构"
+    echo "  test     - 测试相关"
+    echo "  perf     - 性能优化"
+    echo "  ci       - CI/CD 相关"
+    echo "  build    - 构建相关"
+    echo "  chore    - 其他杂项"
+    echo "  revert   - 回滚"
+    echo "  merge    - 合并分支"
+    echo ""
+    echo "Examples:"
+    echo "  feat(auth): add JWT refresh token"
+    echo "  fix(api): resolve nil pointer panic"
+    echo "  docs: update README"
+    echo "  refactor(user): simplify validation logic"
+    echo ""
+    exit 1
+fi
+
+echo -e "${GREEN}✓ Commit message format is valid${NC}"
+exit 0

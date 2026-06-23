@@ -1,6 +1,12 @@
 // rocway 框架二进制入口。
 //
 // 所有外部依赖通过 Wire 注入（internal/wire），本文件不直接装配任何依赖。
+//
+// @title roc_way API
+// @version 1.0
+// @description 基于 Go + Gin 的轻量级 Web 开发框架
+// @host localhost:8080
+// @BasePath /
 package main
 
 import (
