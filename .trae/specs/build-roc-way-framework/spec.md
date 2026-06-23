@@ -104,9 +104,20 @@
 - **WHEN** 调用 `viper.WatchConfig()` 并运行时修改 `configs/config.yaml` 中某个标量字段
 - **THEN** viper `OnConfigChange` 回调 5 秒内被触发，框架重新读取该字段并写 reload 日志
 
+#### Scenario: 命令行注入配置文件
+- **WHEN** 执行 `./rocway -c /path/to/config.yaml`
+- **THEN** 使用 `/path/to/config.yaml` 作为配置文件
+- **AND** 命令行参数优先于默认路径 `configs/config.yaml`
+
+#### Scenario: 配置优先级
+- **WHEN** 同时设置：命令行 `-c /custom/config.yaml` + 环境变量 `ROCWAY_DB_HOST=10.0.0.1`
+- **THEN** 最终配置为：命令行 YAML 的值被环境变量覆盖（最高优先级）
+
 ### Requirement: 数据库访问
 
 框架 SHALL 基于 GORM 提供 MySQL 访问能力，包含自动迁移、连接池、重试、读写分离。
+
+> **后续扩展**：计划支持 PostgreSQL 适配（通过 `gorm.io/driver/postgres`），接口设计需兼容多数据库。
 
 #### Scenario: 自动迁移
 - **WHEN** 定义 struct `User{ID uint; Name string}` 并注册到 auto-migrate 列表
@@ -178,11 +189,12 @@
 
 ### Requirement: 中间件
 
-框架 SHALL 内置 CORS、限流、访问日志、JWT 认证、CSRF 五个中间件。
+框架 SHALL 内置 CORS、限流、访问日志、JWT 认证、CSRF 五个中间件。CORS 从 `server.cors` 配置读取，支持动态 Origin 验证、ExposeHeaders、MaxAge、AllowCredentials。
 
 #### Scenario: 限流
-- **WHEN** 同一 IP 1 秒内请求 `/login` 超过 10 次
-- **THEN** 第 11 次返回 `429 Too Many Requests`
+- **WHEN** `server.rate_limit.enabled=true` 且同一 IP 1 秒内请求超过 `server.rate_limit.rps`
+- **THEN** 第 N+1 次返回 `429 Too Many Requests` + `X-RateLimit-*` 响应头
+- **AND** 支持 `memory`（单机）或 `redis`（分布式）后端
 
 #### Scenario: CSRF
 - **WHEN** 浏览器 POST 请求缺少 `X-CSRF-Token` 头
@@ -258,7 +270,7 @@
 - 内部值对象（如 `User`、`Money`）、工具函数（如 `time.Now`、`strings.ToLower`）**不**参与注入
 
 #### Scenario: 一条龙装配
-- **WHEN** `cmd/rocway/main.go` 调用 `wire.Build(ProviderSet)`
+- **WHEN** `cmd/rocway/main.go` 调用 `wire.Build(...)`
 - **THEN** 生成的 `wire_gen.go` 提供 `InitApp(cfg) (*App, func(), error)`，自动注入所有依赖
 
 ### Requirement: 部署产物

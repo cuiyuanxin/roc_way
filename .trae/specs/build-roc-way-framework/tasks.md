@@ -102,8 +102,8 @@
 ## Phase 4 — 中间件 (P4)
 
 - [x] **Task 4.1**: 实现中间件集合 `internal/pkg/middleware`
-  - [x] 4.1.1 `CORS()` 允许配置的 origins/methods/headers（基于 [`gin-contrib/cors`](https://github.com/gin-contrib/cors)）
-  - [x] 4.1.2 `RateLimit(rps int, burst int)` 基于 `golang.org/x/time/rate` 按 IP 限流
+  - [x] 4.1.1 `CORS()` 允许配置的 origins/methods/headers/expose_headers/max_age/allow_credentials（从请求头获取 Origin，动态设置）
+  - [x] 4.1.2 `NewRateLimiter()` 支持 memory 或 redis 后端，基于 `golang.org/x/time/rate`，自动设置 `X-RateLimit-*` 响应头，触发限流返回 429
   - [x] 4.1.3 `AccessLog(logger)` 记录 API 日志
   - [x] 4.1.4 `JWT(auth)` 解析 Authorization 头 + 校验黑名单
   - [x] 4.1.5 `CSRF(secret)` 校验 `X-CSRF-Token`，GET/HEAD/OPTIONS 跳过（基于 [`gorilla/csrf`](https://github.com/gorilla/csrf) 或 `gin-csrf`）
@@ -113,7 +113,7 @@
 ## Phase 5 — 应用与入口 (P5)
 
 - [x] **Task 5.1**: 实现参考应用 `internal/app/admin`
-  - [x] 5.1.1 `app.go`：构造 `*gin.Engine`，按顺序挂载中间件链
+  - [x] 5.1.1 `app.go`：构造 `*gin.Engine`，按顺序挂载中间件链，`TrustedProxies` 从配置读取（为空则使用 gin 默认），`CORS` 从配置读取（无默认值）
   - [x] 5.1.2 `controller/health.go`：`GET /healthz`
   - [x] 5.1.3 `controller/user.go`：示例 CRUD，演示 validator + auth + errcode
   - [x] 5.1.4 `controller/sse.go` + `controller/ws.go`：演示实时通信
@@ -122,10 +122,14 @@
 
 - [x] **Task 5.2**: 实现框架入口 `cmd/rocway/main.go`
   - [x] 5.2.1 初始化 logger
-  - [x] 5.2.2 加载 config（含热更新）
+  - [x] 5.2.2 加载 config（含热更新 Watch）
   - [x] 5.2.3 初始化 database、cache、storage、scheduler
   - [x] 5.2.4 调用 `admin.New(cfg, deps).Run()`
   - [x] 5.2.5 监听 SIGINT/SIGTERM 优雅关停
+  - [x] 5.2.6 命令行 `-c` 参数指定配置文件
+  - [x] 5.2.7 请求超时中间件（从 `server.timeout` 读取，0 表示禁用，超时返回 504 + request_id）
+  - [x] 5.2.7 HTTP Server `ReadHeaderTimeout` 从配置读取（可选，默认10秒）
+  - [x] 5.2.8 HTTPS 支持（可选，`server.tls.enabled`，默认关闭）
 
 - [x] **Task 5.3**: 实现 CLI 脚手架 `cmd/rocway-cli/main.go`（**分级实现**）
   - [x] 5.3.1 顶层入口使用 **cobra** 维护命令树（`rocway-cli new`、`rocway-cli gen`、`rocway-cli version` 等子命令）
@@ -141,12 +145,18 @@
   - [x] 5.4.2 README 提示用户如何 `go mod init` 与 `go run`
 
 - [x] **Task 5.5**: 实现依赖注入 `internal/wire/`（**DDD + Wire**）
-  - [x] 5.5.1 `internal/wire/provider.go` 集中所有 Provider：`NewConfig`、`NewLogger`、`NewDB`、`NewCache`、`NewEnforcer`、`NewStorage`、`NewScheduler`
-  - [x] 5.5.2 `internal/wire/wire.go` 中 `func InitializeApp(cfg *Config) (*App, func(), error)`，body 为 `wire.Build(ProviderSet, admin.NewApp)`
+  - [x] 5.5.1 `internal/wire/wire.go` 中直接列出所有 Provider（`provideLogger`、`provideEnforcer`、`database.Open`、`cache.New`、`auth.New`、`realtime.NewHub`）
+  - [x] 5.5.2 `internal/wire/wire.go` 中 `func InitializeApp(cfg *Config) (*App, func(), error)`，body 为 `wire.Build(...)` 直接列出所有 Provider
   - [x] 5.5.3 执行 `wire ./internal/wire` 生成 `wire_gen.go`
   - [x] 5.5.4 `cmd/rocway/main.go` 调用 `wire.InitializeApp(cfg)`，**不**再手写 `app := admin.New(cfg, logger, db, ...)`
   - [x] 5.5.5 **DDD 原则审计**：仅外部可变依赖（DB / Cache / Storage / MQ / Enforcer / Logger）走 Provider；领域模型 `User`、`Money` 等不写 Provider；工具函数不抽象
   - **不造轮子依据**：用户硬性指定 **Wire**。Wire 是 google 出品的编译期 DI 工具，零反射、零开销；自实现 DI 框架会重蹈 antirez/kelseyhightower 等小众方案的覆辙。
+
+- [x] **Task 5.6**: 命令行注入配置文件
+  - [x] 5.6.1 使用标准库 `flag` 解析 `-c` 或 `--config` 参数指定配置文件路径
+  - [x] 5.6.2 默认值为 `configs/config.yaml`
+  - [x] 5.6.3 命令行参数优先于默认路径
+  - [x] 5.6.4 配置文件加载后，环境变量仍可覆盖（最高优先级）
 
 ## Phase 6 — 配置与部署产物 (P6)
 

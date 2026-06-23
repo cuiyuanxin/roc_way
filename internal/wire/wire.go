@@ -30,7 +30,7 @@ func InitApp(ctx context.Context, cfg config.Config) (*admin.App, func(), error)
 		auth.New,
 		provideEnforcer,
 		realtime.NewHub,
-		wire.Struct(new(admin.Deps), "Cfg", "Log", "DB", "Auth", "Enforcer", "Hub"),
+		wire.Struct(new(admin.Deps), "Cfg", "Log", "DB", "Cache", "Auth", "Enforcer", "Hub"),
 		admin.NewApp,
 	)
 	return nil, nil, nil

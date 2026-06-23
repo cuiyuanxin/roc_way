@@ -24,9 +24,10 @@ type PaginatedResponse[T any] struct {
 
 // ErrorResponse 错误响应结构。
 type ErrorResponse struct {
-	Code    int         `json:"code" example:"1000"`
-	Message string      `json:"message" example:"参数错误"`
-	Details interface{} `json:"details,omitempty"`
+	Code      int         `json:"code" example:"1000"`
+	Message   string      `json:"message" example:"参数错误"`
+	RequestID string      `json:"request_id,omitempty"`
+	Details   interface{} `json:"details,omitempty"`
 }
 
 // NewResponse 创建通用响应。
@@ -53,10 +54,11 @@ func NewPaginatedResponse[T any](list []T, total int64, page, pageSize int) Pagi
 }
 
 // NewErrorResponse 创建错误响应。
-func NewErrorResponse(code int, message string, details interface{}) ErrorResponse {
+func NewErrorResponse(code int, message string, requestID string, details interface{}) ErrorResponse {
 	return ErrorResponse{
-		Code:    code,
-		Message: message,
-		Details: details,
+		Code:      code,
+		Message:   message,
+		RequestID: requestID,
+		Details:   details,
 	}
 }

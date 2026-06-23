@@ -24,8 +24,40 @@ type Config struct {
 
 // ServerConfig HTTP 服务配置。
 type ServerConfig struct {
-	Addr string `mapstructure:"addr"`
-	Mode string `mapstructure:"mode"`
+	Addr              string          `mapstructure:"addr"`
+	Mode              string          `mapstructure:"mode"`
+	ReadHeaderTimeout int             `mapstructure:"read_header_timeout"` // 秒
+	Timeout           int             `mapstructure:"timeout"`             // 请求超时时间（秒），0 表示不启用
+	TLS               TLSConfig       `mapstructure:"tls"`
+	TrustedProxies    []string        `mapstructure:"trusted_proxies"` // 信任的代理 IP 列表，为空则信任所有
+	CORS              CORSConfig      `mapstructure:"cors"`
+	RateLimit         RateLimitConfig `mapstructure:"rate_limit"`
+}
+
+// TLSConfig HTTPS/TLS 配置。
+type TLSConfig struct {
+	Enabled  bool   `mapstructure:"enabled"`
+	CertFile string `mapstructure:"cert_file"`
+	KeyFile  string `mapstructure:"key_file"`
+}
+
+// CORSConfig CORS 配置（无默认值，按需配置）。
+type CORSConfig struct {
+	Origins          []string `mapstructure:"origins"`           // 允许的来源列表，为空默认 "*"
+	Methods          []string `mapstructure:"methods"`           // 允许的方法
+	Headers          []string `mapstructure:"headers"`           // 允许的请求头
+	ExposeHeaders    []string `mapstructure:"expose_headers"`    // 允许客户端访问的响应头
+	MaxAge           int      `mapstructure:"max_age"`           // 预检请求缓存时间（秒）
+	AllowCredentials bool     `mapstructure:"allow_credentials"` // 是否允许携带凭证
+}
+
+// RateLimitConfig 限流配置。
+type RateLimitConfig struct {
+	Enabled   bool    `mapstructure:"enabled"`    // 是否启用限流
+	Driver    string  `mapstructure:"driver"`     // 驱动类型：memory（单机）或 redis（分布式）
+	RPS       float64 `mapstructure:"rps"`        // 每秒请求数
+	Burst     int     `mapstructure:"burst"`      // 突发容量
+	KeyPrefix string  `mapstructure:"key_prefix"` // Redis key 前缀（仅 redis 模式）
 }
 
 // DatabaseConfig MySQL 配置。
@@ -109,6 +141,8 @@ func New() *Manager {
 func setDefaults(v *viper.Viper) {
 	v.SetDefault("server.addr", ":8080")
 	v.SetDefault("server.mode", "debug")
+	v.SetDefault("server.read_header_timeout", 10) // 秒
+	v.SetDefault("server.tls.enabled", false)      // 默认不启用 HTTPS
 	v.SetDefault("database.max_open_conns", 50)
 	v.SetDefault("database.max_idle_conns", 10)
 	v.SetDefault("cache.prefix", "rocway:")

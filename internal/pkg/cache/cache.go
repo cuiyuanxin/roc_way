@@ -33,6 +33,11 @@ func New(cfg config.CacheConfig) (*Client, error) {
 	return &Client{rdb: rdb, prefix: cfg.Prefix}, nil
 }
 
+// RDB 返回底层 redis.Client（供 limiter 等组件使用）。
+func (c *Client) RDB() *redis.Client {
+	return c.rdb
+}
+
 func (c *Client) k(key string) string { return c.prefix + key }
 
 // Set 写入并设置 TTL。

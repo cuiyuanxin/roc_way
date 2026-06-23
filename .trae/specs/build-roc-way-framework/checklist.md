@@ -15,10 +15,14 @@
 ## 配置管理（基于 viper）
 
 - [x] `internal/pkg/config` 使用 `viper.New()` 封装 `Load(path)` / `Watch(onChange)`
+- [x] `cmd/rocway/main.go` 调用 `cfgMgr.Watch()` 启用热更新
 - [x] 修改 `configs/config.yaml` 后 5s 内 `viper.OnConfigChange` 回调被触发
 - [x] `ROCWAY_DB_HOST=10.0.0.1` 通过 `viper.AutomaticEnv` 覆盖默认配置
 - [x] 缺失字段由 `viper.SetDefault` 提供默认值
 - [x] 单元测试覆盖 YAML 加载 / env 覆盖 / 热更新
+- [x] `./rocway -c /custom/config.yaml` 使用指定配置文件
+- [x] 命令行参数优先于默认路径 `configs/config.yaml`
+- [x] 环境变量仍可覆盖命令行 YAML 配置（最高优先级）
 
 ## 日志（Zap + Lumberjack）
 
@@ -77,8 +81,8 @@
 
 ## 中间件
 
-- [x] CORS 允许配置的跨域
-- [x] 限流：1s 内 >10 次请求 `/login` 返回 `429`
+- [x] CORS 从 `server.cors` 配置读取（origins/methods/headers/expose_headers/max_age/allow_credentials，无默认值，从请求头获取 Origin）
+- [x] 限流：从 `server.rate_limit` 配置读取（enabled/driver/rps/burst/key_prefix），支持 memory 和 redis 后端，自动设置 X-RateLimit-* 响应头，触发返回 429
 - [x] 缺 `X-CSRF-Token` 的 POST 返回 `403`
 - [x] Panic 在 `Recovery` 后转 `errcode.ErrInternal` JSON 响应
 
@@ -87,6 +91,9 @@
 - [x] `go run ./cmd/rocway` 后 `curl /healthz` 返回 200 `{"status":"ok"}`
 - [x] `curl /api/v1/users` 经过 JWT 中间件校验
 - [x] SSE 与 WebSocket 示例可访问
+- [x] HTTP Server `ReadHeaderTimeout` 从 `server.read_header_timeout` 读取（默认10秒）
+- [x] HTTP Server `Timeout` 从 `server.timeout` 读取（0 表示不启用，超时返回 504）
+- [x] HTTPS 可通过 `server.tls.enabled=true` 启用（ListenAndServeTLS）
 
 ## CLI 脚手架（分级实现）
 
@@ -144,7 +151,7 @@
 
 ## 依赖注入（DDD + Wire）
 
-- [x] `internal/wire/provider.go` 集中 Provider；`wire_gen.go` 已生成并随源码提交
+- [x] `internal/wire/wire.go` 列出所有 Provider；`wire_gen.go` 已生成并随源码提交
 - [x] `cmd/rocway/main.go` 通过 `wire.InitializeApp(cfg)` 一行启动，无手写依赖装配
 - [x] Provider **仅**覆盖外部可变依赖（DB / Cache / Storage / MQ / Enforcer / Logger / Config）
 - [x] 领域模型（`User`、`Money` 等）、工具函数未出现 Provider / Interface 抽象（避免过度注入）

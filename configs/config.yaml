@@ -3,6 +3,26 @@
 server:
   addr: ":8080"   # HTTP 监听地址
   mode: "debug"   # gin mode: debug | release | test
+  read_header_timeout: 10  # 读取请求头的超时时间（秒），可选，默认10
+  timeout: 30  # 请求超时时间（秒），0 表示不启用超时
+  trusted_proxies: []  # 信任的代理 IP 列表，为空则信任所有，生产环境建议配置（如 ["127.0.0.1", "::1"]）
+  tls:
+    enabled: false   # 是否启用 HTTPS，可选，默认 false
+    cert_file: "configs/server.crt"  # TLS 证书文件路径
+    key_file: "configs/server.key"    # TLS 私钥文件路径
+  cors:  # CORS 配置（可选，不配置则默认允许所有来源）
+    # origins: ["https://example.com"]  # 允许的来源列表，为空默认 "*"
+    # methods: ["GET", "POST", "PUT"]  # 允许的方法
+    # headers: ["Content-Type", "Authorization"]  # 允许的请求头
+    # expose_headers: ["X-Custom-Header"]  # 允许客户端访问的响应头
+    # max_age: 3600  # 预检请求缓存时间（秒）
+    # allow_credentials: false  # 是否允许携带凭证
+  rate_limit:  # 限流配置（可选，默认禁用）
+    enabled: true  # 是否启用限流
+    driver: "memory"  # 驱动类型：memory（单机）或 redis（分布式）
+    rps: 100  # 每秒请求数
+    burst: 200  # 突发容量
+    key_prefix: "limiter"  # Redis key 前缀（仅 redis 模式）
 
 database:
   write:

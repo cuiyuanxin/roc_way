@@ -14,13 +14,13 @@ COMMIT_MSG=$(cat "$COMMIT_MSG_FILE")
 # Conventional Commits 格式: type(scope): subject
 # type: feat, fix, docs, chore, refactor, test, perf, style, ci, build, revert
 # scope: 可选，用括号包裹
-# subject: 简短描述，以小写字母开头，不含句号
+# subject: 简短描述，以字母或中文开头，不含句号
 
 # 支持的类型
 VALID_TYPES="feat|fix|docs|style|refactor|test|perf|ci|build|chore|revert|merge"
 
-# Conventional Commits 正则
-PATTERN="^($VALID_TYPES)(\([a-zA-Z0-9_-]+\))?!?: [a-z][a-z0-9 ].*$"
+# Conventional Commits 正则（支持中英文 subject）
+PATTERN="^($VALID_TYPES)(\([a-zA-Z0-9_-]+\))?!?: .+$"
 
 if ! echo "$COMMIT_MSG" | grep -qE "$PATTERN"; then
     echo -e "${RED}ERROR: Commit message does not follow Conventional Commits format.${NC}"
@@ -42,9 +42,13 @@ if ! echo "$COMMIT_MSG" | grep -qE "$PATTERN"; then
     echo ""
     echo "Examples:"
     echo "  feat(auth): add JWT refresh token"
+    echo "  feat(auth): 添加 JWT 刷新令牌"
     echo "  fix(api): resolve nil pointer panic"
+    echo "  fix(api): 修复空指针异常"
     echo "  docs: update README"
+    echo "  docs: 更新 README 文档"
     echo "  refactor(user): simplify validation logic"
+    echo "  refactor(user): 简化验证逻辑"
     echo ""
     exit 1
 fi

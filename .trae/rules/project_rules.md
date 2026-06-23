@@ -7,6 +7,10 @@
 - 项目根目录：`d:\WWW\golangProject\roc_way`
 - 语言：Go
 - Go 模块路径（**module path**）：`github.com/cuiyuanxin/roc_way`  ⚠️ 2026-06-22 由 `github.com/roc_way` 改名为 `github.com/cuiyuanxin/roc_way`，所有 `.go` 文件、`go.mod` 与文档**必须**使用新路径。
+  - **历史变更**：
+    - 2026-06-22：模块路径由 `github.com/roc_way` 改名为 `github.com/cuiyuanxin/roc_way`（用户手动完成）。后续新增 import 必须沿用新路径。
+    - 2026-06-22：`internal/pkg/middleware.Recovery` 升级为「环境自适应」—— release 仅返回 `code/message`，详细 panic 详情仅写 zap 日志，**禁止**在生产响应中回显堆栈或敏感信息。
+    - 2026-06-23：新增 `internal/pkg/middleware.RequestID`，基于 `github.com/gin-contrib/requestid` v1.0.6，**优先读请求头 `X-Request-ID`、缺失则自动生成 UUID v4**，并把 ID 同步注入 `gin.Context`、写入响应头；同时所有对外错误响应（Recovery / RateLimit / JWT / CSRF）均在 body 中回带 `request_id` 字段，访问日志与 panic 日志也带 `request_id`。
 - 目录布局：基于 [golang-standards/project-layout](https://github.com/golang-standards/project-layout) 社区标准布局
 
 ## 目录用途对照表
@@ -55,6 +59,24 @@
    - `cmd/<app>/`、`internal/app/<app>/`、`pkg/<lib>/` 用真实业务名称替换占位符。
    - 目录名与最终可执行文件/包名保持一致。
 9. **Go 编译器强制规则**：`internal/` 及其任何层级的子包只允许 `internal/` 同父目录树内的代码导入，公共库放 `pkg/`。
+10. **错误响应与环境适配（`internal/pkg/middleware.Recovery` + `api/response`）**：
+    - `Recovery` 中间件使用 `response.NewErrorResponse` 统一封装，**禁止**硬编码响应结构。
+    - `ErrorResponse` 固定字段：`code`、`message`、`request_id`（详情见下方规则）。
+    - `Recovery` 中间件**环境自适应**，由 `gin.Mode()` 决定 details 字段：
+      - `debug` / `test` 模式 → `details` 填充 panic 内容，便于本地定位。
+      - `release` 模式 → `details` 为 `nil`，**不**泄漏 panic 详情。
+    - 无论哪种环境，**完整 panic 详情**（err / path / method / client_ip）**必须**写入 `zap` 日志，便于线上排障。
+    - **禁止**在 release 响应中回显 stack trace、SQL、密钥、文件路径等敏感信息。
+    - 新增任何对外错误响应中间件/Handler 时，沿用同一原则：debug 详、release 简、详情落日志。
+11. **RequestID 链路追踪（`internal/pkg/middleware.RequestID`）**：
+    - 唯一 ID 来源是 `github.com/gin-contrib/requestid` 事实标准库，**禁止**自实现 ID 生成。
+    - 默认行为：**优先取请求头 `X-Request-ID`（透传，便于跨服务追踪）**，缺失或为空时自动用库默认 `uuid.New().String()` 生成。
+    - 注入位置：
+      1. `gin.Context`（key 默认 `"request_id"`，可通过 `RequestIDOptions.ContextKey` 自定义）
+      2. 响应头 `X-Request-ID`（可通过 `RequestIDOptions.Header requestid.HeaderStrKey` 自定义）
+    - 业务层取 ID 一律用 `middleware.GetRequestID(c)`，**禁止**直接 `c.Get("request_id")`。
+    - **中间件链顺序强制**：`RequestID` 必须是**第一个**注册的中间件，后续所有中间件（`AccessLog` / `Recovery` / `JWT` / `CSRF` / `RateLimit`）才能从 context 读到 `request_id` 并写入日志 / 错误响应。
+    - **所有对外错误响应 body 必须带 `request_id` 字段**（无敏感信息，便于前端报错时反馈给后端定位日志）。
 
 ## 后续开发检查清单
 

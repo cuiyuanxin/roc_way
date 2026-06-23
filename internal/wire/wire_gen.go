@@ -30,12 +30,12 @@ func InitApp(ctx context.Context, cfg config.Config) (*admin.App, func(), error)
 	if err != nil {
 		return nil, nil, err
 	}
-	authConfig := cfg.Auth
 	cacheConfig := cfg.Cache
 	client, err := cache.New(cacheConfig)
 	if err != nil {
 		return nil, nil, err
 	}
+	authConfig := cfg.Auth
 	authAuth := auth.New(authConfig, client)
 	enforcer, err := provideEnforcer(cfg)
 	if err != nil {
@@ -46,6 +46,7 @@ func InitApp(ctx context.Context, cfg config.Config) (*admin.App, func(), error)
 		Cfg:      cfg,
 		Log:      loggers,
 		DB:       db,
+		Cache:    client,
 		Auth:     authAuth,
 		Enforcer: enforcer,
 		Hub:      hub,
