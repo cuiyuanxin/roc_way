@@ -8,6 +8,8 @@
 /dist/
 /storage/
 /logs/
+/*.exe
+/internal/wire/wire_gen.go
 
 # Go
 *.test
