@@ -21,12 +21,15 @@ import (
 )
 
 // InitApp 由 wire 生成，调用者通过 wire_gen.go 实际执行注入。
+//
+// 修复 [C7]：返回的 cleanup 函数集中执行 app.Close + db.Close + cache.Close，
+// 避免 janitor / Hub / 限流器 / DB / Redis 任一资源泄漏。
 func InitApp(ctx context.Context, cfg config.Config) (*admin.App, func(), error) {
 	wire.Build(
 		wire.FieldsOf(&cfg, "Database", "Cache", "Auth"),
 		provideLogger,
 		database.Open,
-		cache.New,
+		provideCache,
 		auth.New,
 		provideEnforcer,
 		realtime.NewHub,
@@ -44,6 +47,14 @@ func provideLogger(cfg config.Config) (*logger.Loggers, error) {
 		MaxMB:  cfg.Logger.MaxMB,
 		Backup: cfg.Logger.Backup,
 	})
+}
+
+// provideCache 注入 cache.New，把 *logger.Loggers 拆出 api logger 传入 cache.New。
+//
+// 强制：cache.New 显式接收 *zap.SugaredLogger，**禁止**用 zap.L() 兜底。
+// cache 启动失败归到 api 通道（与「连接池/外部服务」语义一致）。
+func provideCache(cfg config.CacheConfig, l *logger.Loggers) (*cache.Client, error) {
+	return cache.New(cfg, l.API())
 }
 
 // provideEnforcer 装配 casbin enforcer。

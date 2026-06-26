@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -38,21 +39,56 @@ func SSE(c *gin.Context, ch <-chan any) {
 
 // Hub 管理一组客户端连接。
 type Hub struct {
-	mu      sync.RWMutex
-	clients map[*WSClient]struct{}
-	reg     chan *WSClient
-	unreg   chan *WSClient
-	bcast   chan []byte
+	mu             sync.RWMutex
+	clients        map[*WSClient]struct{}
+	reg            chan *WSClient
+	unreg          chan *WSClient
+	bcast          chan []byte
+	allowedOrigins []string // 允许的 Origin 白名单；包含 "*" 表示放行所有
+	upgrader       websocket.Upgrader
 }
 
 // NewHub 创建 Hub。
 func NewHub() *Hub {
-	return &Hub{
+	h := &Hub{
 		clients: make(map[*WSClient]struct{}),
 		reg:     make(chan *WSClient, 16),
 		unreg:   make(chan *WSClient, 16),
 		bcast:   make(chan []byte, 64),
 	}
+	// 默认：允许所有 Origin（与原行为兼容）；生产环境应在 NewApp 里
+	// 调用 SetAllowedOrigins 注入 CORS 共享的白名单，避免 CSWSH 攻击。
+	h.upgrader = websocket.Upgrader{
+		CheckOrigin: h.checkOrigin,
+	}
+	return h
+}
+
+// SetAllowedOrigins 注入允许的 Origin 白名单。
+//
+// 与 d.Cfg.Server.CORS.Origins 共享同一份配置：
+//   - 包含 "*"：放行所有 origin（仅在 AllowCredentials=false 时安全）；
+//   - 否则按精确匹配校验请求 Origin 头。
+// 必须在 Run() 启动前调用；运行期变更需要重启 Hub。
+func (h *Hub) SetAllowedOrigins(origins []string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.allowedOrigins = origins
+}
+
+// checkOrigin 校验请求 Origin 是否在白名单内。
+func (h *Hub) checkOrigin(r *http.Request) bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if len(h.allowedOrigins) == 0 {
+		return true // 未配置时保持放行（开发友好）
+	}
+	for _, o := range h.allowedOrigins {
+		if o == "*" || strings.EqualFold(o, r.Header.Get("Origin")) {
+			return true
+		}
+	}
+	return false
 }
 
 // Run 启动 Hub 主循环。ctx 结束由调用方通过 close(unreg/bcast) 触发，或在调用方用 select<-ctx.Done()。
@@ -100,11 +136,6 @@ func (h *Hub) pingAll() {
 // Broadcast 发送文本消息给所有客户端。
 func (h *Hub) Broadcast(msg []byte) { h.bcast <- msg }
 
-// Upgrader 默认 upgrader，允许跨域。
-var Upgrader = websocket.Upgrader{
-	CheckOrigin: func(_ *http.Request) bool { return true },
-}
-
 // WSClient 单个 WebSocket 客户端。
 type WSClient struct {
 	hub  *Hub
@@ -114,7 +145,7 @@ type WSClient struct {
 
 // Serve 处理单个 HTTP 升级请求并把客户端接入 Hub。
 func (h *Hub) Serve(c *gin.Context) error {
-	conn, err := Upgrader.Upgrade(c.Writer, c.Request, nil)
+	conn, err := h.upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		return err
 	}

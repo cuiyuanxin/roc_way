@@ -8,6 +8,7 @@ package wire
 
 import (
 	"context"
+
 	"github.com/cuiyuanxin/roc_way/internal/app/admin"
 	"github.com/cuiyuanxin/roc_way/internal/pkg/auth"
 	"github.com/cuiyuanxin/roc_way/internal/pkg/cache"
@@ -20,6 +21,10 @@ import (
 // Injectors from wire.go:
 
 // InitApp 由 wire 生成，调用者通过 wire_gen.go 实际执行注入。
+//
+// 修复 [C7]：cleanup 闭包捕获 app，按 LIFO 顺序统一释放 app 持有的所有资源
+// （Hub、janitor、限流器、DB、Redis、Logger）。原实现 cleanup 为空，
+// 导致 janitor / Hub goroutine 泄漏、DB / Redis 连接未关闭。
 func InitApp(ctx context.Context, cfg config.Config) (*admin.App, func(), error) {
 	loggers, err := provideLogger(cfg)
 	if err != nil {
@@ -31,7 +36,7 @@ func InitApp(ctx context.Context, cfg config.Config) (*admin.App, func(), error)
 		return nil, nil, err
 	}
 	cacheConfig := cfg.Cache
-	client, err := cache.New(cacheConfig)
+	client, err := provideCache(cacheConfig, loggers)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -53,6 +58,8 @@ func InitApp(ctx context.Context, cfg config.Config) (*admin.App, func(), error)
 	}
 	app := admin.NewApp(deps)
 	return app, func() {
+		// 修复 [C7]：app.Close 已统一管理所有资源（Hub/janitor/限流器/DB/Redis/Logger）
+		app.Close()
 	}, nil
 }
 
@@ -66,6 +73,14 @@ func provideLogger(cfg config.Config) (*logger.Loggers, error) {
 		MaxMB:  cfg.Logger.MaxMB,
 		Backup: cfg.Logger.Backup,
 	})
+}
+
+// provideCache 注入 cache.New，把 *logger.Loggers 拆出 api logger 传入 cache.New。
+//
+// 强制：cache.New 显式接收 *zap.SugaredLogger，**禁止**用 zap.L() 兜底。
+// cache 启动失败归到 api 通道（与「连接池/外部服务」语义一致）。
+func provideCache(cfg config.CacheConfig, l *logger.Loggers) (*cache.Client, error) {
+	return cache.New(cfg, l.API())
 }
 
 // provideEnforcer 装配 casbin enforcer。

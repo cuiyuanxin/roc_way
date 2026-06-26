@@ -2,6 +2,7 @@
 package logger
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,10 +12,11 @@ import (
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
-// Loggers 持有 API 与 DB 两个独立 SugaredLogger。
+// Loggers 持有 API / DB / Security 三个独立 SugaredLogger。
 type Loggers struct {
-	api *zap.SugaredLogger
-	db  *zap.SugaredLogger
+	api      *zap.SugaredLogger
+	db       *zap.SugaredLogger
+	security *zap.SugaredLogger
 }
 
 // API 返回 API 访问日志 logger。
@@ -22,6 +24,29 @@ func (l *Loggers) API() *zap.SugaredLogger { return l.api }
 
 // DB 返回数据库日志 logger。
 func (l *Loggers) DB() *zap.SugaredLogger { return l.db }
+
+// Security 返回安全事件 logger。
+//
+// 专用于账号锁定、登录失败等安全敏感事件的记录，
+// 运维可按 channel 过滤（logs/security.log）。
+func (l *Loggers) Security() *zap.SugaredLogger { return l.security }
+
+// Sync 刷盘所有 logger 缓冲（zap.Sync）。
+//
+// 应在进程退出前调用（如 defer），保证应用退出前缓冲的日志不丢失。
+// 多 logger 全部关闭，任一失败合并到 errors 返回。
+func (l *Loggers) Sync() error {
+	var errs []error
+	for _, lg := range []*zap.SugaredLogger{l.api, l.db, l.security} {
+		if lg == nil {
+			continue
+		}
+		if err := lg.Sync(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
 
 // Config 日志配置。
 type Config struct {
@@ -58,10 +83,12 @@ func New(cfg Config) (*Loggers, error) {
 
 	apiCore := zapcore.NewCore(encoder, newWriter(filepath.Join(cfg.Dir, "api.log"), cfg), level)
 	dbCore := zapcore.NewCore(encoder, newWriter(filepath.Join(cfg.Dir, "db.log"), cfg), level)
+	securityCore := zapcore.NewCore(encoder, newWriter(filepath.Join(cfg.Dir, "security.log"), cfg), level)
 
 	api := zap.New(apiCore, zap.AddCaller()).Sugar()
 	db := zap.New(dbCore, zap.AddCaller()).Sugar()
-	return &Loggers{api: api, db: db}, nil
+	security := zap.New(securityCore, zap.AddCaller()).Sugar()
+	return &Loggers{api: api, db: db, security: security}, nil
 }
 
 func newWriter(path string, cfg Config) zapcore.WriteSyncer {

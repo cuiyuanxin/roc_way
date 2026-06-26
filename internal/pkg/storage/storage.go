@@ -3,6 +3,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -46,8 +47,36 @@ func newLocal(cfg config.StorageConfig) *localDriver {
 	return &localDriver{dir: cfg.LocalDir, publicBase: cfg.PublicBase}
 }
 
+// errInvalidKey 表示 key 不合法（含 ../ 路径遍历、空 key、绝对路径等）。
+var errInvalidKey = errors.New("storage: invalid key")
+
+// safePath 校验 key 不会逃出 baseDir 目录。
+//
+// 防御路径遍历攻击（OWASP Path Traversal）：
+//   - 拒绝绝对路径（key 以 / 或盘符开头）；
+//   - filepath.Clean 后再次确认结果仍在 baseDir 下；
+//   - 拒绝空 key / 仅空白字符 key。
+func safePath(baseDir, key string) (string, error) {
+	if key == "" || strings.TrimSpace(key) == "" {
+		return "", errInvalidKey
+	}
+	cleaned := filepath.Clean(filepath.FromSlash(key))
+	if filepath.IsAbs(cleaned) || strings.HasPrefix(cleaned, "..") || strings.Contains(cleaned, ".."+string(filepath.Separator)) {
+		return "", errInvalidKey
+	}
+	full := filepath.Join(baseDir, cleaned)
+	rel, err := filepath.Rel(baseDir, full)
+	if err != nil || strings.HasPrefix(rel, "..") || rel == ".." {
+		return "", errInvalidKey
+	}
+	return full, nil
+}
+
 func (l *localDriver) Put(_ context.Context, key string, r io.Reader) (string, error) {
-	full := filepath.Join(l.dir, filepath.FromSlash(key))
+	full, err := safePath(l.dir, key)
+	if err != nil {
+		return "", err
+	}
 	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 		return "", err
 	}
@@ -63,11 +92,19 @@ func (l *localDriver) Put(_ context.Context, key string, r io.Reader) (string, e
 }
 
 func (l *localDriver) Get(_ context.Context, key string) (io.ReadCloser, error) {
-	return os.Open(filepath.Join(l.dir, filepath.FromSlash(key)))
+	full, err := safePath(l.dir, key)
+	if err != nil {
+		return nil, err
+	}
+	return os.Open(full)
 }
 
 func (l *localDriver) Delete(_ context.Context, key string) error {
-	return os.Remove(filepath.Join(l.dir, filepath.FromSlash(key)))
+	full, err := safePath(l.dir, key)
+	if err != nil {
+		return err
+	}
+	return os.Remove(full)
 }
 
 func (l *localDriver) URL(key string) string {
