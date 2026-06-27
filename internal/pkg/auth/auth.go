@@ -65,13 +65,18 @@ type Auth struct {
 // secret 加载顺序（三级回退，前者优先）：
 //  1. 环境变量 JWT_SECRET（生产推荐）
 //  2. 配置 cfg.JWTSecret（本地 / 单一节点）
-//  3. 配置文件 configs/.jwt_secret（不存在则自动生成；dev 模式专用）
+//  3. 配置文件 configs/.jwt_secret（不存在则自动生成；仅 dev 模式允许）
+//
+// dev 模式判定：serverMode != "release"（即 debug / test / dev 等都算 dev）
+//   - debug / test → 允许 dev fallback（自动生成 secret）
+//   - release     → 禁止 dev fallback，必须显式提供 secret，否则启动失败
+//   - 这一设计**复用 gin 既有 mode 概念**，避免与 server.mode 重复表达
 //
 // 强制：
 //   - secret ≥ 32 字节（启动时校验，< 32 直接 panic）
-//   - cfg.ProductionMode=true 时禁止 dev 自动生成（必须显式提供 secret）
-func New(cfg config.AuthConfig, c *cache.Client, log *zap.SugaredLogger) (*Auth, error) {
-	secret, source, err := resolveSecret(cfg)
+func New(cfg config.AuthConfig, serverMode string, c *cache.Client, log *zap.SugaredLogger) (*Auth, error) {
+	isDev := serverMode != "release"
+	secret, source, err := resolveSecret(cfg, isDev)
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +94,7 @@ func New(cfg config.AuthConfig, c *cache.Client, log *zap.SugaredLogger) (*Auth,
 		refreshTTL = 7 * 24 * time.Hour
 	}
 
-	printSecretBanner(log, source, len(secret), cfg.ProductionMode)
+	printSecretBanner(log, source, len(secret), serverMode, isDev)
 
 	return &Auth{
 		secret:     secret,
@@ -102,7 +107,9 @@ func New(cfg config.AuthConfig, c *cache.Client, log *zap.SugaredLogger) (*Auth,
 }
 
 // resolveSecret 三级回退解析 secret。
-func resolveSecret(cfg config.AuthConfig) ([]byte, secretSource, error) {
+//
+// isDev=false（server.mode=release）时禁止 dev fallback，必须显式提供。
+func resolveSecret(cfg config.AuthConfig, isDev bool) ([]byte, secretSource, error) {
 	// 1) env 优先（生产推荐；K8s Secret 注入的 secret 走 env）
 	if v := os.Getenv("JWT_SECRET"); v != "" {
 		return []byte(v), sourceEnv, nil
@@ -111,10 +118,10 @@ func resolveSecret(cfg config.AuthConfig) ([]byte, secretSource, error) {
 	if cfg.JWTSecret != "" {
 		return []byte(cfg.JWTSecret), sourceConfig, nil
 	}
-	// 3) dev fallback：自动生成 / 读取文件
-	if cfg.ProductionMode {
-		return nil, "", errors.New("auth: production_mode=true requires explicit jwt_secret; " +
-			"set env JWT_SECRET or config:auth.jwt_secret")
+	// 3) dev fallback：仅 isDev=true 允许
+	if !isDev {
+		return nil, "", errors.New("auth: server.mode=release requires explicit jwt_secret; " +
+			"set env JWT_SECRET or config:auth.jwt_secret (see configs/config.yaml)")
 	}
 	secret, err := loadOrGenerateDevSecret(devSecretPath)
 	if err != nil {
@@ -153,32 +160,29 @@ func loadOrGenerateDevSecret(path string) ([]byte, error) {
 }
 
 // printSecretBanner 启动时打印 secret 来源横幅（不打印 secret 内容）。
-func printSecretBanner(log *zap.SugaredLogger, source secretSource, length int, productionMode bool) {
+//
+// 日志等级规则：
+//   - dev + dev fallback：WARN ⚠️（醒目的本地开发警告）
+//   - dev + 显式 secret：INFO（本地开发者自己配的，知道自己在干嘛）
+//   - release + 显式 secret：INFO mode=release（正常生产启动）
+func printSecretBanner(log *zap.SugaredLogger, source secretSource, length int, serverMode string, isDev bool) {
 	if log == nil {
 		return
 	}
-	if productionMode {
-		log.Infow("jwt.secret_loaded",
-			"source", string(source),
-			"length_bytes", length,
-			"mode", "PRODUCTION",
-		)
-		return
-	}
-	// dev 模式：明确警告
-	if source == sourceDevFile {
+	if isDev && source == sourceDevFile {
 		log.Warnw("⚠️  jwt.secret DEV MODE (auto-generated)",
+			"server_mode", serverMode,
 			"source", string(source),
 			"length_bytes", length,
-			"warning", "for local dev ONLY; restart will keep same secret (file), but DO NOT use in production",
-			"fix", "set env JWT_SECRET or config:auth.jwt_secret + production_mode=true for production",
+			"warning", "for local dev ONLY; set env JWT_SECRET or config:auth.jwt_secret for production",
+			"fix", "change server.mode=release + provide secret",
 		)
 		return
 	}
 	log.Infow("jwt.secret_loaded",
+		"server_mode", serverMode,
 		"source", string(source),
 		"length_bytes", length,
-		"mode", "DEV",
 	)
 }
 

@@ -138,19 +138,13 @@ type CacheConfig struct {
 //  2. 本字段 JWTSecret（本地 / 单一节点）
 //  3. 自动生成到 configs/.jwt_secret（dev 模式专用，文件保留重启不丢）
 //
-// ProductionMode 强制：
-//   - true 时禁止 dev fallback（必须显式提供 secret，env 或 yaml ），启动失败否则
-//   - 这是「小白零配置 + 生产强制」的关键开关
+// dev 模式判定：复用 server.mode（debug / test / dev / ... 允许 dev fallback，release 禁止）。
+// 这一设计**避免与 server.mode 重复表达同一个概念**，少一处配置错误风险。
 type AuthConfig struct {
 	// JWTSecret HS256 签名密钥。
 	// 生产环境**推荐**走 env 变量 JWT_SECRET（K8s Secret / Vault 注入），
-	// 留空则按 ProductionMode 决定是 dev fallback 还是启动失败。
+	// 留空则按 server.mode 决定是 dev fallback 还是启动失败（server.mode=release 时启动失败）。
 	JWTSecret string `mapstructure:"jwt_secret"`
-
-	// ProductionMode 生产模式开关。
-	// true 时：禁止 dev fallback（必须显式提供 secret，否则启动失败）。
-	// false 时：允许自动生成 dev secret 到 configs/.jwt_secret。
-	ProductionMode bool `mapstructure:"production_mode"`
 
 	// AccessTTL  / RefreshTTL（秒）。0 = 用默认（2h / 7d）。
 	AccessTTLSec  int    `mapstructure:"access_ttl_sec"`

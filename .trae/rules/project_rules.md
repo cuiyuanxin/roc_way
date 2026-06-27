@@ -337,7 +337,7 @@
       - `ErrAccountLocked = Code{2005, "账号已锁定，请稍后再试", 423}`（HTTP 423 Locked）
       - `ErrNotImplemented = Code{2006, "功能未实现", 501}`
       - **禁止**在 service / handler 里就地定义 `errcode.Code`。
-20. **JWT 签名算法选型（HS256 智能 secret 管理，Phase 2.5 决策）**：
+20. **JWT 签名算法选型（HS256 智能 secret 管理）**：
     - **算法固定 HS256**（行业标准；单服务后台脚手架首选；与 gin-jwt / go-admin / go-zero 一致）。
       - **禁止**无脑升 RS256：单服务架构下 RS256 的「公私钥分离」优势用不上，徒增 ~150 行 PEM 解析代码。
       - RS256 仅在**多服务架构 / BFF / 前端本地验签**场景才有意义；本项目是单服务后台，不需要。
@@ -345,10 +345,11 @@
       1. **环境变量 `JWT_SECRET`**（生产推荐，K8s Secret / Vault 注入）
       2. **`config.yaml` 的 `auth.jwt_secret` 字段**（本地 / 单一节点）
       3. **自动生成到 `configs/.jwt_secret`**（dev 模式专用，文件保留重启不丢）
-    - **`production_mode` 硬开关**（`auth.production_mode`，`mapstructure:"production_mode"`）：
-      - `true` 时：禁止 dev fallback，必须显式提供 secret，**否则启动 panic**（不会带病上线）。
-      - `false` 时：允许 dev fallback（自动生成 secret）。
-      - **推荐**：本地开发 `false`，部署到任何正式环境都设 `true`。
+    - **dev 模式判定：复用 `server.mode`**（**禁止**单独搞 `auth.production_mode` 字段）：
+      - 判定规则：`serverMode != "release"` 即 dev 模式（debug / test / dev 等都允许 dev fallback）。
+      - dev 模式：允许自动生成 secret 到 `configs/.jwt_secret`。
+      - release 模式：禁止 dev fallback，**必须显式提供 secret**（env 或 yaml），否则启动 panic。
+      - **为什么不单独搞 production_mode**：server.mode 本来就是「环境级别」标识（gin 框架自带），再搞一个 auth.production_mode 是重复表达同一概念，少一处配置错误风险。
     - **secret 强度强制**：
       - 启动时校验 `len(secret) >= 32`（OWASP HS256 推荐 ≥ 256 bit）；< 32 启动失败。
       - 启动横幅只打印**来源**（env/config/file）与**长度**，**禁止**打印 secret 内容。

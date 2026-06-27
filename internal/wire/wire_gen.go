@@ -42,7 +42,8 @@ func InitApp(ctx context.Context, cfg config.Config) (*admin.App, func(), error)
 		return nil, nil, err
 	}
 	authConfig := cfg.Auth
-	auth, err := provideAuth(authConfig, client, loggers)
+	serverConfig := cfg.Server
+	auth, err := provideAuth(authConfig, serverConfig, client, loggers)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -117,11 +118,12 @@ func provideCache(cfg config.CacheConfig, l *logger.Loggers) (*cache.Client, err
 	return cache.New(cfg, l.API())
 }
 
-// provideAuth 装配 [auth.New]，注入 *zap.SugaredLogger。
+// provideAuth 装配 [auth.New]，注入 cfg.Server.Mode + *zap.SugaredLogger。
 //
+// dev 模式判定（详见 auth.New）：serverMode != "release" → 允许 dev fallback。
 // 用 api 通道输出 secret 来源横幅（启动 banner），不打印 secret 内容。
-func provideAuth(cfg config.AuthConfig, c *cache.Client, l *logger.Loggers) (*auth.Auth, error) {
-	return auth.New(cfg, c, l.API())
+func provideAuth(cfg config.AuthConfig, sc config.ServerConfig, c *cache.Client, l *logger.Loggers) (*auth.Auth, error) {
+	return auth.New(cfg, sc.Mode, c, l.API())
 }
 
 // provideEnforcer 装配 casbin enforcer。
