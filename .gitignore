@@ -21,6 +21,9 @@
 /air_errors.log
 /tmp/*.exe
 
+# Windows 上误生成的 nul 保留设备名占位文件
+/nul
+
 # Go
 *.test
 *.out
