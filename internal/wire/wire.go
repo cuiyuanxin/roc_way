@@ -8,8 +8,10 @@ package wire
 
 import (
 	"context"
+	"strings"
 
 	"github.com/google/wire"
+	gormlogger "gorm.io/gorm/logger"
 
 	"github.com/cuiyuanxin/roc_way/internal/app/admin"
 	"github.com/cuiyuanxin/roc_way/internal/pkg/auth"
@@ -28,6 +30,7 @@ func InitApp(ctx context.Context, cfg config.Config) (*admin.App, func(), error)
 	wire.Build(
 		wire.FieldsOf(&cfg, "Database", "Cache", "Auth"),
 		provideLogger,
+		provideGormLogger,
 		database.Open,
 		provideCache,
 		auth.New,
@@ -47,6 +50,38 @@ func provideLogger(cfg config.Config) (*logger.Loggers, error) {
 		MaxMB:  cfg.Logger.MaxMB,
 		Backup: cfg.Logger.Backup,
 	})
+}
+
+// provideGormLogger 根据 cfg.Logger.DBEnabled 决定是否把 GORM 日志接入 db channel。
+//
+// DBEnabled=false（默认）→ 返回 nil → database.Open 走 gorm 默认 logger，
+// 完全不写 db.log，不增加任何 IO 开销，符合「server features opt-in」约束。
+//
+// DBEnabled=true  → 按 cfg.Logger.DBLogLevel / DBSlowThreshold 装配 [logger.NewGormLogger]，
+// 所有 GORM Info/Warn/Error/Trace 都会写入 logs/db.log，caller 指向业务 repository。
+func provideGormLogger(cfg config.Config, l *logger.Loggers) gormlogger.Interface {
+	if !cfg.Logger.DBEnabled {
+		return nil
+	}
+	return logger.NewGormLogger(l, parseGormLevel(cfg.Logger.DBLogLevel), cfg.Logger.DBSlowThreshold)
+}
+
+// parseGormLevel 把 yaml 字符串映射为 gorm logger 级别，未识别值降级为 Warn。
+//
+// 字符串大小写不敏感，匹配：silent/error/warn/info。
+func parseGormLevel(s string) gormlogger.LogLevel {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "silent":
+		return gormlogger.Silent
+	case "error":
+		return gormlogger.Error
+	case "info":
+		return gormlogger.Info
+	case "warn", "":
+		return gormlogger.Warn
+	default:
+		return gormlogger.Warn
+	}
 }
 
 // provideCache 注入 cache.New，把 *logger.Loggers 拆出 api logger 传入 cache.New。

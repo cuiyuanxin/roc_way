@@ -150,15 +150,19 @@ func (s *LockService) getRedisLock(ctx context.Context, key string) (redisLockMe
 // 流程：
 //  1. Redis INCR 失败计数（24h 滚动窗口）
 //  2. 写 DB failure 记录（带在线清理）
-//  3. 若新计数 >= long_threshold → 写长期锁定
-//  4. 否则若新计数 >= short_threshold → 写短期锁定
-//  5. Notify 推送
+//  3. 若已有 short lock 且新 count >= long_threshold → 强制升级为 long lock
+//  4. 否则若新 count >= long_threshold → 写长期锁定
+//  5. 否则若新 count >= short_threshold → 写短期锁定
+//  6. Notify 推送
 func (s *LockService) RecordFailure(ctx context.Context, username, ip string) domain.LockLevel {
 	now := time.Now()
 	cutoff := now.Add(-24 * time.Hour)
 
 	// 1. 失败计数（Redis 优先，DB 兜底）
 	count := s.recordFailureCount(ctx, username, ip, now, cutoff)
+
+	// 2. 查询当前活跃锁定（用于判定是否升级 short → long）
+	current := s.GetLock(ctx, username)
 
 	level := domain.LockNone
 	var duration time.Duration
@@ -174,11 +178,20 @@ func (s *LockService) RecordFailure(ctx context.Context, username, ip string) do
 		return domain.LockNone
 	}
 
-	// 2. 写锁定（Redis 主存 + DB 兜底）
+	// 3. 写锁定（Redis 主存 + DB 兜底）
 	expiresAt := now.Add(duration)
-	s.writeLock(ctx, username, level, count, now, expiresAt)
+	// 已有 short lock 且本次需要升级 long → 强制覆盖（清掉 short Redis key）
+	if current != nil && current.Level == domain.LockShort && level == domain.LockLong {
+		if s.cache != nil {
+			_ = s.cache.Del(ctx, shortLockKey(username))
+		}
+		s.writeLock(ctx, username, level, count, now, expiresAt)
+	} else if current == nil || current.Level != level {
+		// 无活跃锁定 或 级别发生变化（如 short → short 不重复写）→ 写入新锁定
+		s.writeLock(ctx, username, level, count, now, expiresAt)
+	}
 
-	// 3. 通知安全管理员（异步，Notifier 不返回 error / 不 panic）
+	// 4. 通知安全管理员（异步，Notifier 不返回 error / 不 panic）
 	if s.notifier != nil {
 		eventType := "account_locked_short"
 		if level == domain.LockLong {
