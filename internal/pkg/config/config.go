@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/spf13/viper"
@@ -14,16 +15,24 @@ import (
 
 // Config 聚合全部子配置。
 type Config struct {
-	Server   ServerConfig   `mapstructure:"server"`
-	Database DatabaseConfig `mapstructure:"database"`
-	Cache    CacheConfig    `mapstructure:"cache"`
-	Auth     AuthConfig     `mapstructure:"auth"`
-	Storage  StorageConfig  `mapstructure:"storage"`
-	Logger   LoggerConfig   `mapstructure:"logger"`
+	Server      ServerConfig      `mapstructure:"server"`
+	Database    DatabaseConfig    `mapstructure:"database"`
+	Cache       CacheConfig       `mapstructure:"cache"`
+	Auth        AuthConfig        `mapstructure:"auth"`
+	Storage     StorageConfig     `mapstructure:"storage"`
+	Logger      LoggerConfig      `mapstructure:"logger"`
+	LoginPolicy LoginPolicyConfig `mapstructure:"login_policy"`
 }
+
+// DeployMode 部署模式。
+const (
+	DeploySingle  = "single"  // 单实例部署（默认；driver 任意）
+	DeployCluster = "cluster" // 多实例部署；driver 必须为 redis
+)
 
 // ServerConfig HTTP 服务配置。
 type ServerConfig struct {
+	DeployMode        string          `mapstructure:"deploy_mode"` // 部署模式：single（默认） | cluster
 	Addr              string          `mapstructure:"addr"`
 	Mode              string          `mapstructure:"mode"`
 	ReadHeaderTimeout int             `mapstructure:"read_header_timeout"` // 秒
@@ -35,10 +44,17 @@ type ServerConfig struct {
 }
 
 // TLSConfig HTTPS/TLS 配置。
+//
+// 设计原则：「HTTP 不强制，HTTPS 优先」：
+//   - HTTP 永远由 server.addr 启动（向后兼容内网/调试）
+//   - HTTPS 仅在 Enabled=true 时启动，监听独立端口 Addr
+//   - HTTP 请求不带 HSTS 头（避免误导浏览器），HTTPS 自动带
+//   - HSTS 中间件在 app.go 自动按 c.Request.TLS 判断，无需手动配置
 type TLSConfig struct {
-	Enabled  bool   `mapstructure:"enabled"`
-	CertFile string `mapstructure:"cert_file"`
-	KeyFile  string `mapstructure:"key_file"`
+	Enabled  bool   `mapstructure:"enabled"`   // 是否启动 HTTPS server（false 时只跑 HTTP）
+	Addr     string `mapstructure:"addr"`      // HTTPS 监听地址，例 ":8443"（与 HTTP 端口独立）
+	CertFile string `mapstructure:"cert_file"` // PEM 证书路径
+	KeyFile  string `mapstructure:"key_file"`  // PEM 私钥路径
 }
 
 // CORSConfig CORS 配置（无默认值，按需配置）。
@@ -52,6 +68,12 @@ type CORSConfig struct {
 }
 
 // RateLimitConfig 限流配置。
+//
+// driver 与部署模式 (Server.DeployMode) 的关系：
+//   - DeploySingle  + driver=memory | redis：均允许
+//   - DeployCluster + driver=redis     ：允许
+//   - DeployCluster + driver=memory    ：启动 panic（多实例下 memory 计数器不共享，
+//     限流形同虚设，配置层强制防御）
 type RateLimitConfig struct {
 	Enabled   bool    `mapstructure:"enabled"`    // 是否启用限流
 	Driver    string  `mapstructure:"driver"`     // 驱动类型：memory（单机）或 redis（分布式）
@@ -78,9 +100,25 @@ type DSNConfig struct {
 }
 
 // DSN 返回 GORM/MySQL 可直接使用的 DSN 字符串。
+//
+// 启动期校验：Host / User / DBName 任一为空直接 panic（不允许默认值启动 DB）。
+// Port 默认 3306（MySQL 标准端口）。
 func (d DSNConfig) DSN() string {
+	if d.Host == "" {
+		panic("config: Database.Write.Host is required")
+	}
+	if d.User == "" {
+		panic("config: Database.Write.User is required")
+	}
+	if d.DBName == "" {
+		panic("config: Database.Write.DBName is required")
+	}
+	port := d.Port
+	if port == 0 {
+		port = 3306
+	}
 	return fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=True&loc=Local",
-		d.User, d.Password, d.Host, d.Port, d.DBName)
+		d.User, d.Password, d.Host, port, d.DBName)
 }
 
 // CacheConfig Redis 配置。
@@ -92,10 +130,20 @@ type CacheConfig struct {
 }
 
 // AuthConfig 认证配置。
+//
+// Phase 2：JWT 升级 RS256，公私钥分离。
+// 私钥**只**在签发侧使用（auth.New 内部），验签侧（前端 / 其它服务）拿公钥本地验签，
+// 私钥不落日志 / 不进 yaml / 不进 git（`configs/keys/` 已被 .gitignore 屏蔽）。
 type AuthConfig struct {
-	JWTSecret     string `mapstructure:"jwt_secret"`
+	// 私钥 / 公钥 PEM 文件路径（PEM 格式，PKCS#1 或 PKCS#8 都可）。
+	// 私钥用于签发 access / refresh token；公钥用于验签。
+	// 私钥必须**严格限制权限**（chmod 600），且**仅**签发服务持有。
+	PrivateKeyPath string `mapstructure:"private_key_path"`
+	PublicKeyPath  string `mapstructure:"public_key_path"`
+
 	AccessTTLSec  int    `mapstructure:"access_ttl_sec"`
 	RefreshTTLSec int    `mapstructure:"refresh_ttl_sec"`
+	Issuer        string `mapstructure:"issuer"`
 	ModelPath     string `mapstructure:"model_path"`
 	PolicyPath    string `mapstructure:"policy_path"`
 }
@@ -113,10 +161,23 @@ type StorageConfig struct {
 
 // LoggerConfig 日志配置。
 type LoggerConfig struct {
-	Level  string `mapstructure:"level"`
-	Dir    string `mapstructure:"dir"`
-	MaxMB  int    `mapstructure:"max_mb"`
-	Backup int    `mapstructure:"backup"`
+	Level           string        `mapstructure:"level"`
+	Dir             string        `mapstructure:"dir"`
+	MaxMB           int           `mapstructure:"max_mb"`
+	Backup          int           `mapstructure:"backup"`
+	DBEnabled       bool          `mapstructure:"db_enabled"`        // 是否把 GORM 查询错误 / 慢查询写入 db.log（opt-in，默认关闭）
+	DBSlowThreshold time.Duration `mapstructure:"db_slow_threshold"` // GORM 慢查询阈值；0 表示不记录慢查询
+	DBLogLevel      string        `mapstructure:"db_log_level"`      // GORM 日志级别：silent|error|warn|info；默认 warn
+}
+
+// LoginPolicyConfig 登录失败锁定策略。
+type LoginPolicyConfig struct {
+	ShortThreshold  int           `mapstructure:"short_threshold"`  // 短期锁定阈值（连续失败次数）
+	ShortDuration   time.Duration `mapstructure:"short_duration"`   // 短期锁定持续时间
+	LongThreshold   int           `mapstructure:"long_threshold"`   // 长期锁定阈值
+	LongDuration    time.Duration `mapstructure:"long_duration"`    // 长期锁定持续时间
+	AuditRetention  time.Duration `mapstructure:"audit_retention"`  // 审计记录保留时间（用于 janitor 清理）
+	JanitorInterval time.Duration `mapstructure:"janitor_interval"` // janitor 清理间隔
 }
 
 // Manager 持有 viper 实例与当前 Config 快照。
@@ -157,6 +218,12 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("logger.dir", "logs")
 	v.SetDefault("logger.max_mb", 100)
 	v.SetDefault("logger.backup", 7)
+	v.SetDefault("login_policy.short_threshold", 5)
+	v.SetDefault("login_policy.short_duration", "15m")
+	v.SetDefault("login_policy.long_threshold", 10)
+	v.SetDefault("login_policy.long_duration", "24h")
+	v.SetDefault("login_policy.audit_retention", "24h")
+	v.SetDefault("login_policy.janitor_interval", "24h")
 }
 
 // Load 从 path 加载配置文件并解析到 Config。

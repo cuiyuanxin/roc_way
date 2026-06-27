@@ -7,9 +7,10 @@ server:
   timeout: 30  # 请求超时时间（秒），0 表示不启用超时
   trusted_proxies: []  # 信任的代理 IP 列表，为空则信任所有，生产环境建议配置（如 ["127.0.0.1", "::1"]）
   tls:
-    enabled: false   # 是否启用 HTTPS，可选，默认 false
-    cert_file: "configs/server.crt"  # TLS 证书文件路径
-    key_file: "configs/server.key"    # TLS 私钥文件路径
+    enabled: true   # 是否启用 HTTPS server（与 HTTP 并存，HTTP 不强制）
+    addr: ":8443"    # HTTPS 监听地址（与 HTTP 端口独立，默认 :8443）
+    cert_file: "configs/certs/server.crt"  # PEM 证书文件路径
+    key_file: "configs/certs/server.key"    # PEM 私钥文件路径
   cors:  # CORS 配置（可选，不配置则默认允许所有来源）
     # origins: ["https://example.com"]  # 允许的来源列表，为空默认 "*"
     # methods: ["GET", "POST", "PUT"]  # 允许的方法
@@ -47,9 +48,17 @@ cache:
   prefix: "rocway:"
 
 auth:
-  jwt_secret: "change-me-in-production"
-  access_ttl_sec: 3600
+  # === Phase 2: RS256（公私钥分离）===
+  # 私钥**只**在签发服务持有，公钥可发给前端 / 其它服务本地验签
+  # 路径相对项目根；`configs/keys/` 已被 .gitignore 屏蔽，私钥不会入库
+  # 通过 `make gen-jwt-keys` 或 `scripts/gen-jwt-keys.{ps1,sh}` 生成
+  private_key_path: "configs/keys/jwt_private.pem"
+  public_key_path: "configs/keys/jwt_public.pem"
+  # === TTL ===
+  access_ttl_sec: 7200
   refresh_ttl_sec: 604800
+  issuer: "rocway"
+  # === RBAC 模型 / 策略 ===
   model_path: "configs/rbac_model.conf"
   policy_path: "configs/rbac_policy.csv"
 
@@ -68,3 +77,10 @@ logger:
   dir: "logs"
   max_mb: 100
   backup: 7
+  # === db channel (GORM 查询日志) ===
+  # db_enabled: 是否把 GORM 查询错误 / 慢查询写入 logs/db.log（opt-in，默认 false）
+  db_enabled: true
+  # db_slow_threshold: 慢查询阈值，超过写 warn 级别；0 表示不记录慢查询
+  db_slow_threshold: 200ms
+  # db_log_level: GORM 日志级别 silent|error|warn|info；默认 warn
+  db_log_level: "warn"

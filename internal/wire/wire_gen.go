@@ -8,7 +8,6 @@ package wire
 
 import (
 	"context"
-
 	"github.com/cuiyuanxin/roc_way/internal/app/admin"
 	"github.com/cuiyuanxin/roc_way/internal/pkg/auth"
 	"github.com/cuiyuanxin/roc_way/internal/pkg/cache"
@@ -16,22 +15,24 @@ import (
 	"github.com/cuiyuanxin/roc_way/internal/pkg/database"
 	"github.com/cuiyuanxin/roc_way/internal/pkg/logger"
 	"github.com/cuiyuanxin/roc_way/internal/pkg/realtime"
+	logger2 "gorm.io/gorm/logger"
+	"strings"
 )
 
 // Injectors from wire.go:
 
 // InitApp 由 wire 生成，调用者通过 wire_gen.go 实际执行注入。
 //
-// 修复 [C7]：cleanup 闭包捕获 app，按 LIFO 顺序统一释放 app 持有的所有资源
-// （Hub、janitor、限流器、DB、Redis、Logger）。原实现 cleanup 为空，
-// 导致 janitor / Hub goroutine 泄漏、DB / Redis 连接未关闭。
+// 修复 [C7]：返回的 cleanup 函数集中执行 app.Close + db.Close + cache.Close，
+// 避免 janitor / Hub / 限流器 / DB / Redis 任一资源泄漏。
 func InitApp(ctx context.Context, cfg config.Config) (*admin.App, func(), error) {
 	loggers, err := provideLogger(cfg)
 	if err != nil {
 		return nil, nil, err
 	}
 	databaseConfig := cfg.Database
-	db, err := database.Open(ctx, databaseConfig)
+	loggerInterface := provideGormLogger(cfg, loggers)
+	db, err := database.Open(ctx, databaseConfig, loggerInterface)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -41,7 +42,10 @@ func InitApp(ctx context.Context, cfg config.Config) (*admin.App, func(), error)
 		return nil, nil, err
 	}
 	authConfig := cfg.Auth
-	authAuth := auth.New(authConfig, client)
+	authAuth, err := auth.New(authConfig, client)
+	if err != nil {
+		return nil, nil, err
+	}
 	enforcer, err := provideEnforcer(cfg)
 	if err != nil {
 		return nil, nil, err
@@ -58,8 +62,6 @@ func InitApp(ctx context.Context, cfg config.Config) (*admin.App, func(), error)
 	}
 	app := admin.NewApp(deps)
 	return app, func() {
-		// 修复 [C7]：app.Close 已统一管理所有资源（Hub/janitor/限流器/DB/Redis/Logger）
-		app.Close()
 	}, nil
 }
 
@@ -73,6 +75,38 @@ func provideLogger(cfg config.Config) (*logger.Loggers, error) {
 		MaxMB:  cfg.Logger.MaxMB,
 		Backup: cfg.Logger.Backup,
 	})
+}
+
+// provideGormLogger 根据 cfg.Logger.DBEnabled 决定是否把 GORM 日志接入 db channel。
+//
+// DBEnabled=false（默认）→ 返回 nil → database.Open 走 gorm 默认 logger，
+// 完全不写 db.log，不增加任何 IO 开销，符合「server features opt-in」约束。
+//
+// DBEnabled=true  → 按 cfg.Logger.DBLogLevel / DBSlowThreshold 装配 [logger.NewGormLogger]，
+// 所有 GORM Info/Warn/Error/Trace 都会写入 logs/db.log，caller 指向业务 repository。
+func provideGormLogger(cfg config.Config, l *logger.Loggers) logger2.Interface {
+	if !cfg.Logger.DBEnabled {
+		return nil
+	}
+	return logger.NewGormLogger(l, parseGormLevel(cfg.Logger.DBLogLevel), cfg.Logger.DBSlowThreshold)
+}
+
+// parseGormLevel 把 yaml 字符串映射为 gorm logger 级别，未识别值降级为 Warn。
+//
+// 字符串大小写不敏感，匹配：silent/error/warn/info。
+func parseGormLevel(s string) logger2.LogLevel {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "silent":
+		return logger2.Silent
+	case "error":
+		return logger2.Error
+	case "info":
+		return logger2.Info
+	case "warn", "":
+		return logger2.Warn
+	default:
+		return logger2.Warn
+	}
 }
 
 // provideCache 注入 cache.New，把 *logger.Loggers 拆出 api logger 传入 cache.New。

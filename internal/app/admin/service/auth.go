@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"errors"
 	"strconv"
 	"time"
 
@@ -14,7 +13,7 @@ import (
 	"github.com/cuiyuanxin/roc_way/internal/app/admin/repository"
 	"github.com/cuiyuanxin/roc_way/internal/pkg/auth"
 	"github.com/cuiyuanxin/roc_way/internal/pkg/errcode"
-	"github.com/cuiyuanxin/roc_way/pkg/utils"
+	"github.com/cuiyuanxin/roc_way/internal/pkg/utils"
 )
 
 // AuthService 认证应用服务。
@@ -65,24 +64,35 @@ func (s *AuthService) Login(ctx context.Context, in dto.LoginInput) (*auth.Token
 		event.Status = model.LoginStatusInvalidParam
 		event.Reason = "username_or_password_empty"
 		s.loginLogs.RecordLogin(ctx, event)
-		return nil, errcode.New(errcode.ErrInvalidParam, errors.New("login: username and password required"))
+		return nil, errcode.ErrInvalidParam.WithMessage("username 和 password 不能为空")
 	}
 
 	// 1. 查锁定
-	if lock := s.locks.GetLock(ctx, username); lock.Active() {
+	lock := s.locks.GetLock(ctx, username)
+	if lock.Active() {
 		event.Status = model.LoginStatusLockedAttempt
 		event.Reason = "account_locked_short"
 		if lock.Level == domain.LockLong {
 			event.Reason = "account_locked_long"
 		}
 		s.loginLogs.RecordLogin(ctx, event)
+
+		// 长锁到底（不再累加计数、不再升级），直接拦截。
+		if lock.Level == domain.LockLong {
+			return nil, errcode.ErrAccountLocked
+		}
+
+		// 短锁期间继续失败：仍要累加 count，便于达到 long 阈值时升级到 24h 长锁。
+		level := s.locks.RecordFailure(ctx, username, in.IP)
+		if level == domain.LockLong || level == domain.LockShort {
+			return nil, errcode.ErrAccountLocked
+		}
 		return nil, errcode.ErrAccountLocked
 	}
 
 	// 2. 查用户
 	u, err := s.repo.FindByUsername(ctx, username)
 	if err != nil {
-		s.log.Errorw("auth.login_failed", "username", username, "error", err.Error())
 		return nil, errcode.New(errcode.ErrInternal, err)
 	}
 	if u == nil {
@@ -91,7 +101,7 @@ func (s *AuthService) Login(ctx context.Context, in dto.LoginInput) (*auth.Token
 		event.Status = model.LoginStatusFailure
 		event.Reason = "user_not_found"
 		s.loginLogs.RecordLogin(ctx, event)
-		return nil, errcode.New(errcode.ErrUserNotFound, errors.New("login: user not found"))
+		return nil, errcode.ErrUserNotFound.WithMessage("用户不存在")
 	}
 
 	// 3. 校验密码
@@ -104,19 +114,18 @@ func (s *AuthService) Login(ctx context.Context, in dto.LoginInput) (*auth.Token
 		if level == domain.LockShort || level == domain.LockLong {
 			return nil, errcode.ErrAccountLocked
 		}
-		return nil, errcode.New(errcode.ErrPasswordMismatched, errors.New("login: password mismatched"))
+		return nil, errcode.ErrPasswordMismatched.WithMessage("密码错误")
 	}
 
-	// 4. 成功：清失败计数 + 签发 token + 写日志
+	// 4. 成功：清失败计数 + 签发 token（绑定 deviceID） + 写日志
 	s.locks.ClearFailures(ctx, username)
-	pair, err := s.tokens.Issue(strconv.FormatUint(uint64(u.ID), 10))
+	pair, err := s.tokens.IssueWithDevice(strconv.FormatUint(uint64(u.ID), 10), in.DeviceID)
 	if err != nil {
 		// token 签发失败不写 success，但仍要记录失败
 		event.Status = model.LoginStatusFailure
 		event.Reason = "token_issue_failed"
 		event.UserID = u.ID
 		s.loginLogs.RecordLogin(ctx, event)
-		s.log.Errorw("auth.login_failed", "username", username, "error", err.Error())
 		return nil, errcode.New(errcode.ErrInternal, err)
 	}
 	event.Status = model.LoginStatusSuccess
@@ -126,15 +135,45 @@ func (s *AuthService) Login(ctx context.Context, in dto.LoginInput) (*auth.Token
 	return pair, nil
 }
 
-// Logout 用例：将当前 token 加入黑名单。
-func (s *AuthService) Logout(ctx context.Context, jti string) error {
+// Logout 用例：将 access / refresh 一起加入黑名单。
+//
+// 典型用法：客户端在 access 即将过期时主动 logout，会把同 pair 的 refresh
+// 一起传过来；后端把两个 jti 都吊销，下一次即便有人截获旧 refresh 也无法
+// 用它换新 access。
+//
+// refreshToken 为空时只吊销 access jti（向后兼容老调用方 / 没拿到 refresh）。
+func (s *AuthService) Logout(ctx context.Context, jti, refreshToken string) error {
 	if jti == "" {
-		return errcode.New(errcode.ErrUnauthorized, errors.New("auth: missing jti"))
+		return errcode.ErrUnauthorized.WithMessage("缺少 jti")
 	}
 	if err := s.tokens.Revoke(ctx, jti, 24*time.Hour); err != nil {
 		return errcode.New(errcode.ErrInternal, err)
 	}
 	s.log.Infow("auth.logout", "jti", jti)
+
+	// 可选：同时吊销 refresh token（解析出 jti，写入黑名单）
+	if refreshToken == "" {
+		return nil
+	}
+	claims, err := s.tokens.Parse(refreshToken)
+	if err != nil {
+		// refresh 解析失败：access 已吊销，不阻断业务，仅记录
+		s.log.Warnw("auth.logout.refresh_parse_failed", "error", err.Error())
+		return nil
+	}
+	if claims.Kind != "refresh" {
+		s.log.Warnw("auth.logout.not_refresh_token", "kind", claims.Kind)
+		return nil
+	}
+	ttl := time.Until(claims.ExpiresAt.Time)
+	if ttl <= 0 {
+		return nil
+	}
+	if err := s.tokens.Revoke(ctx, claims.ID, ttl); err != nil {
+		s.log.Warnw("auth.logout.refresh_revoke_failed", "error", err.Error())
+		return nil
+	}
+	s.log.Infow("auth.logout.refresh_revoked", "jti", claims.ID)
 	return nil
 }
 
@@ -144,7 +183,7 @@ func (s *AuthService) Logout(ctx context.Context, jti string) error {
 // auth.Auth.Refresh 的真校验（验签 + Kind 断言 + 黑名单 + rotation）。
 func (s *AuthService) Refresh(ctx context.Context, refreshToken string) (*auth.TokenPair, error) {
 	if refreshToken == "" {
-		return nil, errcode.New(errcode.ErrInvalidParam, errors.New("refresh: empty token"))
+		return nil, errcode.ErrInvalidParam.WithMessage("refresh token 不能为空")
 	}
 	pair, err := s.tokens.Refresh(ctx, refreshToken)
 	if err != nil {

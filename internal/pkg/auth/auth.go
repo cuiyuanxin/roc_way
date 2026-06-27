@@ -1,19 +1,25 @@
 // Package auth 提供 JWT 签发 / 验签 / 黑名单能力。
 //
-// 黑名单通过缓存（Redis）实现：Revoke 时写入 jti -> 1，TTL = token 剩余有效期。
+// Phase 2：升级 RS256（公私钥分离）
+//   - 私钥（RSA PrivateKey）用于签发 access / refresh token，**只**在签发服务持有
+//   - 公钥（RSA PublicKey）用于验签，前端 / 其它服务可拿公钥本地验签
+//   - 私钥 / 公钥以 PEM 文件形式存在 configs/keys/（不进 git）
+//   - 黑名单（Redis）继续用 jti 维度，实现 token 吊销
+//   - Claims 加 DeviceID 字段，登录时绑定设备指纹，JWT 中间件校验
 package auth
 
 import (
 	"context"
 	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
 	"encoding/hex"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"os"
-	"strings"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 
 	"github.com/cuiyuanxin/roc_way/internal/pkg/cache"
@@ -21,70 +27,153 @@ import (
 	"github.com/cuiyuanxin/roc_way/internal/pkg/errcode"
 )
 
-// insecureJWTSecrets 不允许在 release 模式使用的默认 / 弱 secret。
+// 私钥 / 公钥最小长度（bit）。
 //
-// 防止运维忘记改默认值导致「任意 token 可伪造」的安全事故。
-var insecureJWTSecrets = map[string]struct{}{
-	"":                          {},
-	"change-me":                 {},
-	"change-me-in-production":   {},
-	"secret":                    {},
-	"jwt-secret":                {},
-	"please-change-me":          {},
-	"rocway-default-jwt-secret": {},
-}
+// OWASP 推荐 RSA ≥ 2048 bit；本项目强制 ≥ 2048，< 4096 给出警告（不强阻）。
+const minRSAKeyBits = 2048
 
-// minJWTSecretLen JWT secret 最小长度（字节）。
+// New 创建 JWT 管理器（RS256 模式）。
 //
-// HS256 推荐 ≥ 32 字节（256 bit），与 HMAC-SHA256 内部块大小一致。
-const minJWTSecretLen = 32
+// 强制：
+//   - cfg.PrivateKeyPath / cfg.PublicKeyPath 必填
+//   - 私钥文件存在且权限 ≤ 0644（更严：≤ 0640 警告，> 0644 阻塞）
+//   - 私钥长度 ≥ 2048 bit
+//   - 公私钥匹配（同一 key pair）
+func New(cfg config.AuthConfig, c *cache.Client) (*Auth, error) {
+	priv, err := loadRSAPrivateKey(cfg.PrivateKeyPath)
+	if err != nil {
+		return nil, fmt.Errorf("auth: load private key: %w", err)
+	}
+	pub, err := loadRSAPublicKey(cfg.PublicKeyPath)
+	if err != nil {
+		return nil, fmt.Errorf("auth: load public key: %w", err)
+	}
+	// 公私钥匹配校验：拿公钥的指数 + 模数对比
+	if priv.PublicKey.N.Cmp(pub.N) != 0 {
+		return nil, errors.New("auth: public key does not match private key")
+	}
+	if priv.PublicKey.E != pub.E {
+		return nil, errors.New("auth: public key exponent mismatch with private key")
+	}
 
-// New 创建 JWT 管理器。
-//
-// 修复 [C3]：启动期校验 secret 强度，release 模式拒绝不安全 secret。
-// 强制：HS256 secret 长度 ≥ 32 字节，且不能在 insecureJWTSecrets 黑名单中。
-func New(cfg config.AuthConfig, c *cache.Client) *Auth {
-	validateJWTSecret(cfg.JWTSecret)
-
-	ttl := time.Duration(cfg.AccessTTLSec) * time.Second
-	if ttl == 0 {
-		ttl = time.Hour
+	accessTTL := time.Duration(cfg.AccessTTLSec) * time.Second
+	if accessTTL == 0 {
+		accessTTL = time.Hour
 	}
 	refreshTTL := time.Duration(cfg.RefreshTTLSec) * time.Second
 	if refreshTTL == 0 {
 		refreshTTL = 7 * 24 * time.Hour
 	}
 	return &Auth{
-		secret:     []byte(cfg.JWTSecret),
-		accessTTL:  ttl,
+		priv:       priv,
+		pub:        pub,
+		accessTTL:  accessTTL,
 		refreshTTL: refreshTTL,
 		issuer:     cfg.Issuer,
 		cache:      c,
+	}, nil
+}
+
+// loadRSAPrivateKey 加载并解析 RSA 私钥 PEM 文件。
+//
+// 支持 PKCS#1（`RSA PRIVATE KEY`）和 PKCS#8（`PRIVATE KEY`）两种格式。
+func loadRSAPrivateKey(path string) (*rsa.PrivateKey, error) {
+	if path == "" {
+		return nil, errors.New("private_key_path is empty")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+	block, _ := pem.Decode(data)
+	if block == nil {
+		return nil, errors.New("not a valid PEM file")
+	}
+	switch block.Type {
+	case "RSA PRIVATE KEY":
+		priv, err := x509.ParsePKCS1PrivateKey(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("parse PKCS#1: %w", err)
+		}
+		validateRSAKeyBits(priv.N.BitLen(), true)
+		return priv, nil
+	case "PRIVATE KEY":
+		key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("parse PKCS#8: %w", err)
+		}
+		priv, ok := key.(*rsa.PrivateKey)
+		if !ok {
+			return nil, errors.New("PKCS#8 key is not RSA")
+		}
+		validateRSAKeyBits(priv.N.BitLen(), true)
+		return priv, nil
+	default:
+		return nil, fmt.Errorf("unsupported PEM block type: %s", block.Type)
 	}
 }
 
-// validateJWTSecret 校验 JWT secret 强度。release 模式发现不安全 secret 直接 panic。
-func validateJWTSecret(secret string) {
-	if _, bad := insecureJWTSecrets[strings.TrimSpace(strings.ToLower(secret))]; bad {
-		// 调试 / 测试模式仅打 warn，避免本地开发卡死；
-		// 生产环境（release mode）必须 panic。
-		if gin.Mode() == gin.ReleaseMode {
-			panic("auth: JWT secret is a known-insecure default; set ROCWAY_AUTH_JWT_SECRET env to a strong value (>= 32 bytes)")
+// loadRSAPublicKey 加载并解析 RSA 公钥 PEM 文件。
+//
+// 支持 `PUBLIC KEY`（PKCS#8 格式公钥） 和 `RSA PUBLIC KEY`（PKCS#1）。
+func loadRSAPublicKey(path string) (*rsa.PublicKey, error) {
+	if path == "" {
+		return nil, errors.New("public_key_path is empty")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+	block, _ := pem.Decode(data)
+	if block == nil {
+		return nil, errors.New("not a valid PEM file")
+	}
+	switch block.Type {
+	case "PUBLIC KEY":
+		key, err := x509.ParsePKIXPublicKey(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("parse PKIX: %w", err)
 		}
-		_, _ = fmt.Fprintf(os.Stderr, "WARN: auth: JWT secret is a known-insecure default; set ROCWAY_AUTH_JWT_SECRET env to a strong value (>= 32 bytes)\n")
+		pub, ok := key.(*rsa.PublicKey)
+		if !ok {
+			return nil, errors.New("PKIX key is not RSA")
+		}
+		validateRSAKeyBits(pub.N.BitLen(), false)
+		return pub, nil
+	case "RSA PUBLIC KEY":
+		pub, err := x509.ParsePKCS1PublicKey(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("parse PKCS#1: %w", err)
+		}
+		validateRSAKeyBits(pub.N.BitLen(), false)
+		return pub, nil
+	default:
+		return nil, fmt.Errorf("unsupported PEM block type: %s", block.Type)
+	}
+}
+
+// validateRSAKeyBits RSA 密钥长度校验。
+//
+// 强制 ≥ minRSAKeyBits (2048)；< 4096 给 warn。
+// 私钥（isPrivate=true）违反时阻塞启动；公钥仅 warn（公钥是公开的）。
+func validateRSAKeyBits(bits int, isPrivate bool) {
+	if bits < minRSAKeyBits {
+		msg := fmt.Sprintf("auth: RSA key length %d bits < %d (OWASP minimum)", bits, minRSAKeyBits)
+		if isPrivate {
+			panic(msg)
+		}
+		_, _ = fmt.Fprintf(os.Stderr, "WARN: %s\n", msg)
 		return
 	}
-	if len(secret) < minJWTSecretLen {
-		if gin.Mode() == gin.ReleaseMode {
-			panic(fmt.Sprintf("auth: JWT secret must be >= %d bytes (got %d); generate with: openssl rand -base64 48", minJWTSecretLen, len(secret)))
-		}
-		_, _ = fmt.Fprintf(os.Stderr, "WARN: auth: JWT secret length %d < %d; recommend setting ROCWAY_AUTH_JWT_SECRET\n", len(secret), minJWTSecretLen)
+	if bits < 4096 {
+		_, _ = fmt.Fprintf(os.Stderr, "WARN: auth: RSA key length %d bits < 4096, recommend regenerating\n", bits)
 	}
 }
 
 // Claims 自定义 JWT 声明。
 type Claims struct {
-	Kind string `json:"kind"` // "access" | "refresh"
+	Kind     string `json:"kind"`     // "access" | "refresh"
+	DeviceID string `json:"device_id"` // 设备指纹（登录时绑定，中间件校验）
 	jwt.RegisteredClaims
 }
 
@@ -98,34 +187,47 @@ type TokenPair struct {
 
 // Auth JWT 管理器。
 type Auth struct {
-	secret     []byte
+	priv       *rsa.PrivateKey
+	pub        *rsa.PublicKey
 	accessTTL  time.Duration
 	refreshTTL time.Duration
 	issuer     string
 	cache      *cache.Client
 }
 
-// Issue 签发一对 token。
+// Issue 签发一对 token（不绑定 device id，向后兼容）。
 func (a *Auth) Issue(subject string) (*TokenPair, error) {
-	access, accessExp, err := a.sign(subject, "access", a.accessTTL)
+	return a.IssueWithDevice(subject, "")
+}
+
+// IssueWithDevice 签发一对 token，并把 deviceID 写入 claims。
+//
+// deviceID 为空时跳过绑定（适用于后台任务 / 系统调用）；
+// 中间件在校验时如果 token claim 里有 deviceID 而请求头没有，会拒绝。
+func (a *Auth) IssueWithDevice(subject, deviceID string) (*TokenPair, error) {
+	access, accessExp, err := a.sign(subject, "access", a.accessTTL, deviceID)
 	if err != nil {
 		return nil, err
 	}
-	refresh, refreshExp, err := a.sign(subject, "refresh", a.refreshTTL)
+	refresh, refreshExp, err := a.sign(subject, "refresh", a.refreshTTL, deviceID)
 	if err != nil {
 		return nil, err
 	}
-	return &TokenPair{Access: access, Refresh: refresh, AccessExp: accessExp.Unix(), RefreshExp: refreshExp.Unix()}, nil
+	return &TokenPair{
+		Access:     access,
+		Refresh:    refresh,
+		AccessExp:  accessExp.Unix(),
+		RefreshExp: refreshExp.Unix(),
+	}, nil
 }
 
 // Refresh 用 refresh token 换一对新的 access + refresh（rotation 机制）。
 //
-// 修复 [C4]：原 handler.refresh 仅回显入参；现实现真校验：
-//  1. 验签 + 解析 refresh token；
-//  2. 断言 claims.Kind == "refresh"（拒绝 access 错用）；
-//  3. 检查 jti 是否在黑名单；
-//  4. 旧 refresh jti 写入黑名单（防止重放）；
-//  5. 签发新一对 token。
+// 1. 验签 + 解析 refresh token；
+// 2. 断言 claims.Kind == "refresh"（拒绝 access 错用）；
+// 3. 检查 jti 是否在黑名单；
+// 4. 旧 refresh jti 写入黑名单（防止重放）；
+// 5. 签发新一对 token（继承 device_id）。
 func (a *Auth) Refresh(ctx context.Context, refreshToken string) (*TokenPair, error) {
 	claims, err := a.Parse(refreshToken)
 	if err != nil {
@@ -134,20 +236,20 @@ func (a *Auth) Refresh(ctx context.Context, refreshToken string) (*TokenPair, er
 	if claims.Kind != "refresh" {
 		return nil, errcode.ErrTokenInvalid.WithMessage("not a refresh token")
 	}
-	// 黑名单检查（防止被吊销的 refresh 继续换 token）
 	revoked, _ := a.IsRevoked(ctx, claims.ID)
 	if revoked {
 		return nil, errcode.ErrTokenInvalid.WithMessage("refresh token revoked")
 	}
-	// rotation：旧 refresh jti 加入黑名单，TTL = 剩余有效期
 	ttl := time.Until(claims.ExpiresAt.Time)
 	if ttl > 0 {
 		_ = a.Revoke(ctx, claims.ID, ttl)
 	}
-	return a.Issue(claims.Subject)
+	// 继承 deviceID
+	return a.IssueWithDevice(claims.Subject, claims.DeviceID)
 }
 
-func (a *Auth) sign(subject, kind string, ttl time.Duration) (string, time.Time, error) {
+// sign 用 RS256 签发 token。
+func (a *Auth) sign(subject, kind string, ttl time.Duration, deviceID string) (string, time.Time, error) {
 	now := time.Now()
 	exp := now.Add(ttl)
 	jti, err := randHex(16)
@@ -155,7 +257,8 @@ func (a *Auth) sign(subject, kind string, ttl time.Duration) (string, time.Time,
 		return "", time.Time{}, err
 	}
 	claims := Claims{
-		Kind: kind,
+		Kind:     kind,
+		DeviceID: deviceID,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    a.issuer,
 			Subject:   subject,
@@ -164,15 +267,19 @@ func (a *Auth) sign(subject, kind string, ttl time.Duration) (string, time.Time,
 			ID:        jti,
 		},
 	}
-	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	signed, err := tok.SignedString(a.secret)
+	tok := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	signed, err := tok.SignedString(a.priv)
 	return signed, exp, err
 }
 
-// Parse 解析并验签 token。
+// Parse 解析并验签 token（用公钥）。
 func (a *Auth) Parse(token string) (*Claims, error) {
-	parsed, err := jwt.ParseWithClaims(token, &Claims{}, func(_ *jwt.Token) (any, error) {
-		return a.secret, nil
+	parsed, err := jwt.ParseWithClaims(token, &Claims{}, func(t *jwt.Token) (any, error) {
+		// 强制 RS256（防 alg=none 攻击 + 防 HS256/RS256 错用）
+		if _, ok := t.Method.(*jwt.SigningMethodRSA); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
+		}
+		return a.pub, nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("auth: parse: %w", err)

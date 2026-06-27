@@ -1,4 +1,4 @@
-// Package admin 演示 rocway 框架的 DDD 分层使用方式（Go 简洁命名）。
+// Package admin 是 roc_way 框架的 admin 应用入口（DDD 分层 + 企业级生产基线）。
 //
 // 分层结构：
 //
@@ -7,6 +7,7 @@
 //	service/        ← 应用服务（业务编排）
 //	handler/        ← HTTP 表现层（薄）
 //	model/          ← 持久化对象（GORM 映射）
+//	dto/            ← 跨层 POJO（不依赖 ORM）
 //	app.go          ← 组装层（依赖注入 + 路由注册）
 package admin
 
@@ -110,6 +111,10 @@ func NewApp(d Deps) *App {
 		AllowCredentials: d.Cfg.Server.CORS.AllowCredentials,
 	}))
 
+	// HSTS：仅当请求是 TLS 时才设置头（HTTP 请求 c.Request.TLS == nil 自动跳过）。
+	// 与 HTTP/HTTPS 双 server 共享同一 Engine 无冲突。
+	e.Use(middleware.HSTS())
+
 	// 全局限流（令牌桶，机器承载力兜底）
 	if err := ratelimit.Validate(d.Cfg.Server.RateLimit, d.Cache, d.Cfg.Server.DeployMode); err != nil {
 		panic("rate limiter: " + err.Error())
@@ -139,18 +144,19 @@ func NewApp(d Deps) *App {
 
 	// 路由级限流：健康检查 + login 各 20次/分钟/IP（配额集中在 ratelimit 包维护；驱动与全局限流共用 d.Cfg.Server.RateLimit）
 	handler.NewHealth(ratelimit.NewRoute(d.Cfg.Server.RateLimit, d.Cache, "healthz")).Register(e)
-	handler.NewAuth(authSvc, v, ratelimit.NewRoute(d.Cfg.Server.RateLimit, d.Cache, "login")).Register(e)
+	authH := handler.NewAuth(authSvc, v, ratelimit.NewRoute(d.Cfg.Server.RateLimit, d.Cache, "login"))
+	authH.Register(e) // 公开路径：login / refresh
 
 	apiGroup := e.Group("/")
 	apiGroup.Use(middleware.JWT(d.Auth))
-	apiGroup.Use(middleware.CSRF())
-	handler.NewUser(userSvc).Register(apiGroup)
+	// CSRF 跳过纯 token 鉴权的 logout：它用 Authorization 头而非 cookie 鉴权，
+	// 不存在「浏览器自动带 cookie」的攻击面，CSRF 防护对它无意义且会误拦 API 调用方。
+	apiGroup.Use(middleware.CSRF(middleware.CSRFOptions{
+		SkipPaths: []string{"/api/auth/logout"},
+	}))
+	handler.NewUser(userSvc, v).Register(apiGroup)
 	handler.NewRealtime(d.Hub).Register(apiGroup)
-
-	apiGroup.GET("/api/v1/admin",
-		d.Enforcer.RequirePermission("api/v1/admin", "GET"),
-		func(c *gin.Context) { response.WriteOK(c, gin.H{"role": "admin"}) },
-	)
+	authH.RegisterLogout(apiGroup) // 受保护路径：logout（需 JWT，跳过 CSRF）
 
 	// 兜底错误响应：路由不存在 / HTTP 方法不允许。
 	//
@@ -195,9 +201,6 @@ func NewApp(d Deps) *App {
 
 // Engine 返回 gin 引擎。
 func (a *App) Engine() *gin.Engine { return a.engine }
-
-// Deps 返回应用依赖（仅供测试场景使用，业务代码禁止读取 Deps 内部字段）。
-func (a *App) Deps() Deps { return a.deps }
 
 // Close 清理资源（停止时调用）。幂等：可重复调用，仅生效一次。
 //
