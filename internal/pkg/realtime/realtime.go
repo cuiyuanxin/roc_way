@@ -14,6 +14,9 @@ import (
 )
 
 // SSE 持续从 ch 读事件并写入响应。事件类型为任意可 JSON 编码的值。
+//
+// 修复 [M7]：使用 select 监听 c.Request.Context().Done()，
+// 客户端断开时立即退出协程，避免 goroutine 永久泄漏。
 func SSE(c *gin.Context, ch <-chan any) {
 	c.Writer.Header().Set("Content-Type", "text/event-stream")
 	c.Writer.Header().Set("Cache-Control", "no-cache")
@@ -25,13 +28,22 @@ func SSE(c *gin.Context, ch <-chan any) {
 		c.AbortWithStatus(http.StatusInternalServerError)
 		return
 	}
-	for v := range ch {
-		data, err := json.Marshal(v)
-		if err != nil {
-			continue
+	ctx := c.Request.Context()
+	for {
+		select {
+		case v, ok := <-ch:
+			if !ok {
+				return
+			}
+			data, err := json.Marshal(v)
+			if err != nil {
+				continue
+			}
+			fmt.Fprintf(c.Writer, "data: %s\n\n", data)
+			flusher.Flush()
+		case <-ctx.Done():
+			return
 		}
-		fmt.Fprintf(c.Writer, "data: %s\n\n", data)
-		flusher.Flush()
 	}
 }
 
@@ -91,7 +103,9 @@ func (h *Hub) checkOrigin(r *http.Request) bool {
 	return false
 }
 
-// Run 启动 Hub 主循环。ctx 结束由调用方通过 close(unreg/bcast) 触发，或在调用方用 select<-ctx.Done()。
+// Run 启动 Hub 主循环。ctx 结束由调用方通过 close(stop) 触发，触发后会主动
+// 关闭所有已注册 client 的 send 通道与底层连接，确保 readPump / writePump 协程退出，
+// 避免上层关闭时 Goroutine 永久泄漏。
 func (h *Hub) Run(stop <-chan struct{}) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -120,8 +134,26 @@ func (h *Hub) Run(stop <-chan struct{}) {
 		case <-ticker.C:
 			h.pingAll()
 		case <-stop:
+			h.closeAll()
 			return
 		}
+	}
+}
+
+// closeAll 主动关闭所有 client 的 send 通道与底层连接（stop 触发时调用）。
+func (h *Hub) closeAll() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for c := range h.clients {
+		// 幂等：unreg 路径会 close(c.send)，此处仅在 client 仍在线时关闭。
+		select {
+		case <-c.send:
+			// 已被关闭的 channel 从 receive 会立即返回零值，跳过
+		default:
+			close(c.send)
+		}
+		_ = c.conn.Close()
+		delete(h.clients, c)
 	}
 }
 

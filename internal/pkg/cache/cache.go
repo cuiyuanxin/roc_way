@@ -4,10 +4,10 @@ package cache
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"go.uber.org/zap"
 
 	"github.com/cuiyuanxin/roc_way/internal/pkg/config"
 )
@@ -19,7 +19,16 @@ type Client struct {
 }
 
 // New 创建缓存客户端。
-func New(cfg config.CacheConfig) (*Client, error) {
+//
+// **启动期不强依赖 Redis**：若 Ping 失败仅打 warn 日志、仍返回可用 Client。
+// 原因：应用支持「Redis 主存 + MySQL 兜底」双存储降级（详见 project_rules.md 第 19 条），
+// Redis 暂时不可达时业务应能继续运行（走 DB 兜底），进程不应被启动期连通性绑死。
+//
+// 真实运行期调用 Get/Set/Incr 等方法时仍会按 redis client 内部策略重试 / 报错，
+// 调用方按 error 处理（service 层会 swallow + 打日志 + 走 DB 兜底）。
+//
+// log 显式注入（**禁止**用 zap.L() 兜底），保证日志进入项目统一的 Loggers 通道（api / db / security）。
+func New(cfg config.CacheConfig, log *zap.SugaredLogger) (*Client, error) {
 	rdb := redis.NewClient(&redis.Options{
 		Addr:     cfg.Addr,
 		Password: cfg.Password,
@@ -28,7 +37,11 @@ func New(cfg config.CacheConfig) (*Client, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if err := rdb.Ping(ctx).Err(); err != nil {
-		return nil, fmt.Errorf("cache: ping: %w", err)
+		// 不返回 error：让业务按"cache 不可用"降级路径走 DB 兜底。
+		log.Warnw("cache.ping_failed_at_startup",
+			"addr", cfg.Addr,
+			"error", err,
+		)
 	}
 	return &Client{rdb: rdb, prefix: cfg.Prefix}, nil
 }
@@ -70,6 +83,27 @@ func (c *Client) Expire(ctx context.Context, key string, ttl time.Duration) erro
 // Incr 自增。
 func (c *Client) Incr(ctx context.Context, key string) (int64, error) {
 	return c.rdb.Incr(ctx, c.k(key)).Result()
+}
+
+// IncrWithTTL 自增并设置 TTL（仅当 key 新建时生效）。
+//
+// 适用于「固定窗口计数器」：第一次自增时设 TTL，后续自增复用现有 TTL。
+// 返回值：自增后的值。
+func (c *Client) IncrWithTTL(ctx context.Context, key string, ttl time.Duration) (int64, error) {
+	pipe := c.rdb.Pipeline()
+	incr := pipe.Incr(ctx, c.k(key))
+	pipe.Expire(ctx, c.k(key), ttl) // 每次都重设 TTL，简单且兼容；如需「仅新 key」用 NX
+	if _, err := pipe.Exec(ctx); err != nil {
+		return 0, err
+	}
+	return incr.Val(), nil
+}
+
+// SetNX 设置值但仅当 key 不存在（用于分布式锁）。
+//
+// 返回 true 表示成功设置，false 表示 key 已存在。
+func (c *Client) SetNX(ctx context.Context, key string, value any, ttl time.Duration) (bool, error) {
+	return c.rdb.SetNX(ctx, c.k(key), value, ttl).Result()
 }
 
 // Scan 基于 SCAN 而非 KEYS 迭代匹配键，每次 COUNT 500，回调 fn 返回 false 停止。

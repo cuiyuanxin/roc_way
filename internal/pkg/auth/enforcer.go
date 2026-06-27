@@ -5,10 +5,10 @@ import (
 	"fmt"
 
 	"github.com/casbin/casbin/v2"
-
 	"github.com/gin-gonic/gin"
 
 	"github.com/cuiyuanxin/roc_way/internal/pkg/errcode"
+	"github.com/cuiyuanxin/roc_way/internal/pkg/response"
 )
 
 // Enforcer 包装 casbin.Enforcer。
@@ -38,6 +38,10 @@ func (e *Enforcer) LoadPolicy() error { return e.e.LoadPolicy() }
 
 // RequirePermission gin 中间件：从 context 取 sub（JWT 注入），调用 Enforce。
 // 失败返回 errcode.ErrForbidden。
+//
+// 注意：本函数未直接 import middleware 包以避免循环依赖（middleware → auth），
+// request_id 由 internal/pkg/response.WriteErr 内部读取 gin.Context 的 "request_id" key。
+// key 必须与 internal/pkg/middleware.DefaultRequestIDContextKey 保持一致。
 func (e *Enforcer) RequirePermission(obj, act string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		sub, _ := c.Get("user_id")
@@ -47,13 +51,13 @@ func (e *Enforcer) RequirePermission(obj, act string) gin.HandlerFunc {
 		}
 		ok, err := e.Enforce(s, obj, act)
 		if err != nil {
-			c.AbortWithStatusJSON(errcode.ErrInternal.HTTPStatus,
-				gin.H{"code": errcode.ErrInternal.Code, "message": err.Error()})
+			response.WriteErr(c, err)
+			c.Abort()
 			return
 		}
 		if !ok {
-			c.AbortWithStatusJSON(errcode.ErrForbidden.HTTPStatus,
-				gin.H{"code": errcode.ErrForbidden.Code, "message": errcode.ErrForbidden.Message})
+			response.WriteErr(c, errcode.ErrForbidden)
+			c.Abort()
 			return
 		}
 		c.Next()
