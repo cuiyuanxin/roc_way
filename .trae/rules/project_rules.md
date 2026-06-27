@@ -337,6 +337,34 @@
       - `ErrAccountLocked = Code{2005, "账号已锁定，请稍后再试", 423}`（HTTP 423 Locked）
       - `ErrNotImplemented = Code{2006, "功能未实现", 501}`
       - **禁止**在 service / handler 里就地定义 `errcode.Code`。
+20. **JWT 签名算法选型（HS256 智能 secret 管理，Phase 2.5 决策）**：
+    - **算法固定 HS256**（行业标准；单服务后台脚手架首选；与 gin-jwt / go-admin / go-zero 一致）。
+      - **禁止**无脑升 RS256：单服务架构下 RS256 的「公私钥分离」优势用不上，徒增 ~150 行 PEM 解析代码。
+      - RS256 仅在**多服务架构 / BFF / 前端本地验签**场景才有意义；本项目是单服务后台，不需要。
+    - **secret 三级回退加载顺序**（`internal/pkg/auth.New`）：
+      1. **环境变量 `JWT_SECRET`**（生产推荐，K8s Secret / Vault 注入）
+      2. **`config.yaml` 的 `auth.jwt_secret` 字段**（本地 / 单一节点）
+      3. **自动生成到 `configs/.jwt_secret`**（dev 模式专用，文件保留重启不丢）
+    - **`production_mode` 硬开关**（`auth.production_mode`，`mapstructure:"production_mode"`）：
+      - `true` 时：禁止 dev fallback，必须显式提供 secret，**否则启动 panic**（不会带病上线）。
+      - `false` 时：允许 dev fallback（自动生成 secret）。
+      - **推荐**：本地开发 `false`，部署到任何正式环境都设 `true`。
+    - **secret 强度强制**：
+      - 启动时校验 `len(secret) >= 32`（OWASP HS256 推荐 ≥ 256 bit）；< 32 启动失败。
+      - 启动横幅只打印**来源**（env/config/file）与**长度**，**禁止**打印 secret 内容。
+      - dev 模式 banner 用 `WARN` 等级（醒目的 ⚠️ 符号 + `warning` / `fix` 字段）。
+    - **文件权限**：
+      - `configs/.jwt_secret` 写入时 `chmod 600`（Linux/macOS）/ `icacls inheritance:r`（Windows）。
+      - `.gitignore` 必须屏蔽 `/configs/.jwt_secret` 与 `*.bak`。
+    - **配套工具**：
+      - `scripts/gen-jwt-secret.{ps1,sh}`：openssl 强随机生成（默认 48 字节 = 384 bit）。
+      - `make gen-jwt-secret` 跨平台入口；`make gen-jwt-keys` 已废弃。
+      - `make install-mkcert` 仍保留（HTTPS cert 与 JWT secret 是两件事）。
+    - **Token 安全特性（与算法无关，HS256/RS256 通用）**：
+      - AccessToken TTL 默认 2h（`access_ttl_sec: 7200`）；RefreshToken TTL 默认 7d。
+      - **Refresh Token Rotation**：每次 refresh 换新一对 token，旧 refresh 立即进黑名单。
+      - **黑名单**（Redis `auth:blacklist:{jti}`）：TTL = token 剩余有效期，吊销单 token。
+      - **DeviceID 绑定**（Claims `device_id` 字段）：登录时绑定设备指纹，中间件校验 `X-Device-ID` 一致性。
 
 ## 后续开发检查清单
 

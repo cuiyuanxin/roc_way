@@ -40,8 +40,9 @@ coverage.*
 /configs/certs/server.crt
 /configs/certs/server.key
 
-# Phase 2: JWT RS256 私钥 / 公钥（不入库；configs/keys/.gitkeep 保留目录）
-/configs/keys/jwt_private.pem
-/configs/keys/jwt_public.pem
-/configs/keys/jwt_private.pem.bak
-/configs/keys/jwt_public.pem.bak
+# Phase 2 改为 Phase 2.5: HS256 智能 secret 管理
+# - dev 模式自动生成的 secret（不留空 secret 字段时）
+# - 用户自己生成的本地开发用 secret
+# 生产**必须**走 env JWT_SECRET（不写文件，K8s Secret / Vault 注入）
+/configs/.jwt_secret
+/configs/.jwt_secret.bak

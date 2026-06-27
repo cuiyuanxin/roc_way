@@ -131,21 +131,35 @@ type CacheConfig struct {
 
 // AuthConfig 认证配置。
 //
-// Phase 2：JWT 升级 RS256，公私钥分离。
-// 私钥**只**在签发侧使用（auth.New 内部），验签侧（前端 / 其它服务）拿公钥本地验签，
-// 私钥不落日志 / 不进 yaml / 不进 git（`configs/keys/` 已被 .gitignore 屏蔽）。
+// 签名算法：HS256（单服务后台脚手架首选；行业标准，与 gin-jwt / go-admin / go-zero 一致）。
+//
+// JWT secret 三级加载顺序（详见 [auth.New]）：
+//  1. 环境变量 JWT_SECRET（生产推荐）
+//  2. 本字段 JWTSecret（本地 / 单一节点）
+//  3. 自动生成到 configs/.jwt_secret（dev 模式专用，文件保留重启不丢）
+//
+// ProductionMode 强制：
+//   - true 时禁止 dev fallback（必须显式提供 secret，env 或 yaml ），启动失败否则
+//   - 这是「小白零配置 + 生产强制」的关键开关
 type AuthConfig struct {
-	// 私钥 / 公钥 PEM 文件路径（PEM 格式，PKCS#1 或 PKCS#8 都可）。
-	// 私钥用于签发 access / refresh token；公钥用于验签。
-	// 私钥必须**严格限制权限**（chmod 600），且**仅**签发服务持有。
-	PrivateKeyPath string `mapstructure:"private_key_path"`
-	PublicKeyPath  string `mapstructure:"public_key_path"`
+	// JWTSecret HS256 签名密钥。
+	// 生产环境**推荐**走 env 变量 JWT_SECRET（K8s Secret / Vault 注入），
+	// 留空则按 ProductionMode 决定是 dev fallback 还是启动失败。
+	JWTSecret string `mapstructure:"jwt_secret"`
 
+	// ProductionMode 生产模式开关。
+	// true 时：禁止 dev fallback（必须显式提供 secret，否则启动失败）。
+	// false 时：允许自动生成 dev secret 到 configs/.jwt_secret。
+	ProductionMode bool `mapstructure:"production_mode"`
+
+	// AccessTTL  / RefreshTTL（秒）。0 = 用默认（2h / 7d）。
 	AccessTTLSec  int    `mapstructure:"access_ttl_sec"`
 	RefreshTTLSec int    `mapstructure:"refresh_ttl_sec"`
 	Issuer        string `mapstructure:"issuer"`
-	ModelPath     string `mapstructure:"model_path"`
-	PolicyPath    string `mapstructure:"policy_path"`
+
+	// RBAC（Casbin）模型 / 策略文件路径。
+	ModelPath  string `mapstructure:"model_path"`
+	PolicyPath string `mapstructure:"policy_path"`
 }
 
 // StorageConfig 文件存储配置。

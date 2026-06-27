@@ -19,7 +19,7 @@ else
   AIR_BIN := $(shell $(GO) env GOPATH)/bin/air
 endif
 
-.PHONY: help tidy wire build run test vet fmt lint clean cli docker swagger install-hooks install-air install-mkcert certs gen-jwt-keys dev
+.PHONY: help tidy wire build run test vet fmt lint clean cli docker swagger install-hooks install-air install-mkcert certs gen-jwt-secret dev
 
 help:
 	@echo "make tidy           - go mod tidy"
@@ -36,7 +36,7 @@ help:
 	@echo "make install-air    - install air (live reload) to \$$(go env GOPATH)/bin"
 	@echo "make install-mkcert - install mkcert (local HTTPS cert tool) via scripts/install-mkcert.*"
 	@echo "make certs          - generate local HTTPS certs to configs/certs/ (dev only)"
-	@echo "make gen-jwt-keys   - generate RS256 RSA key pair to configs/keys/ (Phase 2)"
+	@echo "make gen-jwt-secret - generate HS256 random secret to configs/.jwt_secret (Phase 2.5)"
 	@echo "make dev            - run rocway with air hot reload"
 
 tidy:
@@ -155,20 +155,23 @@ certs: install-mkcert
 	@echo "✔ HTTPS certs generated:"
 	@ls -l configs/certs/server.crt configs/certs/server.key 2>/dev/null || dir configs\certs\server.crt configs\certs\server.key
 
-# Phase 2: 生成 RS256 RSA 密钥对到 configs/keys/。
+# Phase 2.5: 生成 HS256 随机 secret 到 configs/.jwt_secret。
 #
 # 配套：
-#   - 私钥 jwt_private.pem 仅签发服务持有（auth.New 内部加载），自动 chmod 600 / icacls 收紧权限
-#   - 公钥 jwt_public.pem  可发给前端 / 其它服务本地验签
-#   - configs/keys/ 已被 .gitignore 屏蔽，私钥不会入库
+#   - auth.New 启动时三级回退加载 secret：env JWT_SECRET > config > 配置文件
+#   - 本命令生成的 dev 模式 secret 写入 configs/.jwt_secret（mode 600）
+#   - configs/.jwt_secret 已被 .gitignore 屏蔽
 #   - 已有同名文件自动备份为 .bak
 #
 # 跨平台：依赖系统 openssl（Linux/macOS 自带；Windows 通过 Git Bash / WSL / choco 装）。
-# 用法：make gen-jwt-keys [BITS=4096]
-BITS ?= 2048
-gen-jwt-keys:
+# 用法：make gen-jwt-secret [BYTES=64]
+#
+# 为什么不直接用 RS256：单服务后台脚手架不需要公私钥分离，行业标准（gin-jwt / go-admin /
+# go-zero）都使用 HS256 + 强 secret。代码量比 RS256 少 70%，且同样安全。
+BYTES ?= 48
+gen-jwt-secret:
 ifeq ($(GOHOSTOS),windows)
-	@powershell -ExecutionPolicy Bypass -File scripts/gen-jwt-keys.ps1 -Bits $(BITS)
+	@powershell -ExecutionPolicy Bypass -File scripts/gen-jwt-secret.ps1 -Bytes $(BYTES)
 else
-	@bash scripts/gen-jwt-keys.sh $(BITS)
+	@bash scripts/gen-jwt-secret.sh $(BYTES)
 endif

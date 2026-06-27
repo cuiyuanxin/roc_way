@@ -42,7 +42,7 @@ func InitApp(ctx context.Context, cfg config.Config) (*admin.App, func(), error)
 		return nil, nil, err
 	}
 	authConfig := cfg.Auth
-	authAuth, err := auth.New(authConfig, client)
+	auth, err := provideAuth(authConfig, client, loggers)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -56,7 +56,7 @@ func InitApp(ctx context.Context, cfg config.Config) (*admin.App, func(), error)
 		Log:      loggers,
 		DB:       db,
 		Cache:    client,
-		Auth:     authAuth,
+		Auth:     auth,
 		Enforcer: enforcer,
 		Hub:      hub,
 	}
@@ -115,6 +115,13 @@ func parseGormLevel(s string) logger2.LogLevel {
 // cache 启动失败归到 api 通道（与「连接池/外部服务」语义一致）。
 func provideCache(cfg config.CacheConfig, l *logger.Loggers) (*cache.Client, error) {
 	return cache.New(cfg, l.API())
+}
+
+// provideAuth 装配 [auth.New]，注入 *zap.SugaredLogger。
+//
+// 用 api 通道输出 secret 来源横幅（启动 banner），不打印 secret 内容。
+func provideAuth(cfg config.AuthConfig, c *cache.Client, l *logger.Loggers) (*auth.Auth, error) {
+	return auth.New(cfg, c, l.API())
 }
 
 // provideEnforcer 装配 casbin enforcer。
