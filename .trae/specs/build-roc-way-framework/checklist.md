@@ -94,6 +94,9 @@
 - [x] HTTP Server `ReadHeaderTimeout` 从 `server.read_header_timeout` 读取（默认10秒）
 - [x] HTTP Server `Timeout` 从 `server.timeout` 读取（0 表示不启用，超时返回 504）
 - [x] HTTPS 可通过 `server.tls.enabled=true` 启用（ListenAndServeTLS）
+- [x] validator 支持中英文翻译（基于 go-playground/universal-translator，根据 Accept-Language 自动切换）
+- [x] validator 自定义 `fieldmatch` 正则验证（用法：fieldmatch=REGEX[:错误消息]）
+- [x] validator 使用 New+Option 模式注入自定义规则（无 init 副作用）
 
 ## CLI 脚手架（分级实现）
 

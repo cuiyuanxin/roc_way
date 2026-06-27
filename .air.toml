@@ -1,0 +1,97 @@
+# air 跨平台配置（https://github.com/air-verse/air）
+#
+# 用法：
+#   make dev                # 跨平台入口：自动调用下方 .PHONY 目标
+#   air -c .air.toml        # 等价直接调用
+#
+# 跨平台实现：air 官方支持 [build.windows] / [build.darwin] / [build.linux]
+# 平台段，匹配当前 OS 时覆盖基础 [build] 字段。所以下面三段必须各自
+# 完整声明 cmd / bin / full_bin，**禁止**依赖基础段的默认值。
+#
+# 环境变量通过 [env] 段全局注入（air 官方跨平台方案），
+# 各平台 full_bin 只需直接运行 exe，无需 KEY=VAL 或 cmd /C 包装。
+
+root = "."
+testdata_dir = "testdata"
+tmp_dir = "tmp"
+
+# ============== 通用 [build] 默认值（darwin / linux 覆盖） ==============
+[build]
+# 通用延迟 / 排除 / 日志设置（所有平台继承）
+include_ext = ["go", "yaml", "yml", "toml"]
+exclude_dir = [
+  "assets",
+  "bin",
+  "docs",
+  "examples",
+  "tmp",
+  "vendor",
+  "web",
+  "website",
+  "api/docs",
+  "deployments",
+  "build",
+  "internal/wire",
+  ".git",
+  ".idea",
+  ".vscode",
+  "agent",
+  ".agents",
+  "skills-lock.json"
+]
+exclude_regex = ["_test\\.go"]
+delay = 1000
+stop_on_error = true
+log = "air_errors.log"
+# 强制全平台开 poll：Win 下 fsnotify 不可靠；
+# Mac/Linux 偶发 docker mount 场景也建议 poll，更稳。
+poll = true
+poll_interval = 500
+# Linux/macOS 支持优雅 Ctrl+C（INT 信号）
+send_interrupt = true
+kill_delay = 500
+
+# ============== macOS / Linux 平台段 ==============
+[build.darwin]
+cmd = "go build -o ./tmp/rocway ./cmd/rocway"
+bin = "tmp/rocway"
+full_bin = "./tmp/rocway"
+
+[build.linux]
+cmd = "go build -o ./tmp/rocway ./cmd/rocway"
+bin = "tmp/rocway"
+full_bin = "./tmp/rocway"
+
+# ============== Windows 平台段 ==============
+# Windows 必加 .exe 后缀。
+# send_interrupt 在 Windows 上无效（air 限制），保留默认 false。
+[build.windows]
+cmd = "go build -o ./tmp/rocway.exe ./cmd/rocway"
+bin = "tmp\\rocway.exe"
+# Windows 下直接运行 exe，环境变量通过 [env] 段注入（air 官方跨平台方案）。
+full_bin = ".\\tmp\\rocway.exe"
+send_interrupt = false
+
+# ============== 全局环境变量 [env] ==============
+# air 官方跨平台环境变量注入，替代 full_bin 中的 KEY=VAL ./prog 语法。
+# 这样 Windows 下不需要 cmd /C 包装，PID 直接指向 rocway.exe，air 能正确转发信号。
+[env]
+ROCWAY_CONFIG = "configs/config.yaml"
+
+# ============== 日志 / 颜色 / 屏幕 ==============
+[color]
+app = ""
+build = "yellow"
+main = "magenta"
+runner = "green"
+watcher = "cyan"
+
+[log]
+time = true
+
+[misc]
+clean_on_exit = true
+
+[screen]
+clear_on_rebuild = true
+keep_scroll = true

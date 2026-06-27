@@ -15,7 +15,7 @@ func main() {
 		Use:   "rocway-cli",
 		Short: "rocway framework scaffolding CLI",
 	}
-	root.AddCommand(cmdcli.NewCmd(), cmdcli.GenCmd(), cmdcli.VersionCmd())
+	root.AddCommand(cmdcli.NewCmd(), cmdcli.GenCmd(), cmdcli.MigrateCmd(), cmdcli.VersionCmd())
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
