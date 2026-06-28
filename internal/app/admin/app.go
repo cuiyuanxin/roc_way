@@ -2,7 +2,6 @@
 //
 // 分层结构：
 //
-//	domain/         ← 领域层（聚合根，纯 Go 标准库）
 //	repository/     ← 仓储（接口 + GORM 实现）
 //	service/        ← 应用服务（业务编排）
 //	handler/        ← HTTP 表现层（薄）
@@ -66,14 +65,25 @@ func NewApp(d Deps) *App {
 
 	// ============ DDD 装配（依赖注入）============
 	userRepo := repository.NewUserRepository(d.DB)
-	auditRepo := repository.NewLoginAuditRepository(d.DB)  // 锁定跟踪（login_audits）
+	// 锁定跟踪（DB 主源 + Redis 加速缓存：失败计数 + 锁状态）
+	auditRepo := repository.NewLoginAuditRepository(d.DB, d.Cache, repository.LockTTL{
+		Short: d.Cfg.LoginPolicy.ShortDuration,
+		Long:  d.Cfg.LoginPolicy.LongDuration,
+	}, d.Log.Security())
 	loginLogRepo := repository.NewLoginLogRepository(d.DB) // 登录日志（auth_login_logs）
 
 	// 安全事件通知（noop 默认实现 + zap 安全日志）
 	notifier := notify.NewNoopNotifier(d.Log.Security())
 
-	// 锁定服务（Redis 主存 + DB 兜底；写 login_audits）
-	lockSvc := service.NewLockService(auditRepo, d.Cache, notifier, d.Cfg.LoginPolicy, d.Log.API())
+	// 锁定服务（编排：调 repo.RecordFailure / RecordLock / LatestActiveLock；
+	// Redis 加速 + DB 兜底的细节在 repo 内部封装，service 不直接依赖 cache）
+	lockSvc := service.NewLockService(auditRepo, notifier, service.LockPolicy{
+		Window:         d.Cfg.LoginPolicy.AuditRetention,
+		ShortThreshold: d.Cfg.LoginPolicy.ShortThreshold,
+		ShortDuration:  d.Cfg.LoginPolicy.ShortDuration,
+		LongThreshold:  d.Cfg.LoginPolicy.LongThreshold,
+		LongDuration:   d.Cfg.LoginPolicy.LongDuration,
+	}, d.Log.API())
 
 	// 登录日志服务（独立于锁定；写 login_logs）
 	loginAuditSvc := service.NewLoginLogService(loginLogRepo, d.Log.API())

@@ -4,6 +4,7 @@
 //   - 不直接接触领域对象
 //   - 不直接接触 GORM
 //   - **禁止**写业务逻辑
+//   - 透传 service 返回的 dto（service 负责 model→dto 映射，handler 不再做）
 package handler
 
 import (
@@ -13,6 +14,7 @@ import (
 
 	"github.com/cuiyuanxin/roc_way/internal/app/admin/dto"
 	"github.com/cuiyuanxin/roc_way/internal/app/admin/service"
+	"github.com/cuiyuanxin/roc_way/internal/pkg/errcode"
 	"github.com/cuiyuanxin/roc_way/internal/pkg/response"
 	"github.com/cuiyuanxin/roc_way/internal/pkg/validator"
 )
@@ -28,11 +30,49 @@ func NewUser(svc *service.UserService, v *validator.Validator) *User { return &U
 
 // Register 路由注册。
 func (u *User) Register(r gin.IRouter) {
+	r.GET("/api/v1/users/info", u.info)
 	r.POST("/api/v1/users", u.register)
 	r.GET("/api/v1/users", u.list)
 	r.GET("/api/v1/users/:id", u.detail)
 	r.PATCH("/api/v1/users/:id", u.updateName)
 	r.DELETE("/api/v1/users/:id", u.delete)
+}
+
+// info GET /api/v1/users/info
+//
+// 当前登录用户查「自己的」个人信息：
+//   - 从 JWT 中间件写入 gin.Context 的 "user_id" 取出 uid
+//   - 调 UserService.GetByID 走 GORM 查 users 表
+//   - service 直返 *dto.UserInfo，handler 透传（不二次映射）
+//
+// 安全约束（应用 project_rules.md 第 0.1.2 条「输入校验」+ 第 0.1.4 条「越权防护」）：
+//   - 路径是 /info 而不是 /:id，**禁止**接受 URL 里的 id 参数，只能用 token 里的 uid，
+//     避免「拿别人 token 改 URL」越权查询。
+//   - 路由必须在受 JWT 保护的路由组（app.go apiGroup）下挂载，否则 user_id 拿不到。
+//   - token 过期 / 伪造 / 设备不匹配：由 JWT 中间件前置拦截，本 handler 不重复校验。
+//   - 用户被删（token 仍有效）：GetByID 返回 nil → 404 ErrUserNotFound，行为正确。
+func (u *User) info(c *gin.Context) {
+	raw, ok := c.Get("user_id")
+	if !ok || raw == nil {
+		response.WriteErr(c, errcode.ErrUnauthorized.WithMessage("未登录或 token 已失效"))
+		return
+	}
+	uidStr, _ := raw.(string)
+	uid, err := strconv.ParseUint(uidStr, 10, 64)
+	if err != nil || uid == 0 {
+		response.WriteErr(c, errcode.ErrUnauthorized.WithMessage("token 中的用户 ID 不合法"))
+		return
+	}
+	user, err := u.svc.GetByID(c.Request.Context(), uint(uid))
+	if err != nil {
+		response.WriteErr(c, err)
+		return
+	}
+	if user == nil {
+		response.WriteErr(c, errcode.ErrUserNotFound.WithMessage("用户不存在或已被删除"))
+		return
+	}
+	response.WriteOK(c, user)
 }
 
 // register POST /api/v1/users
@@ -80,6 +120,10 @@ func (u *User) detail(c *gin.Context) {
 	user, err := u.svc.GetByID(c.Request.Context(), uint(id))
 	if err != nil {
 		response.WriteErr(c, err)
+		return
+	}
+	if user == nil {
+		response.WriteErr(c, errcode.ErrUserNotFound.WithMessage("用户不存在"))
 		return
 	}
 	response.WriteOK(c, user)

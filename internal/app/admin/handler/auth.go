@@ -40,7 +40,7 @@ func (a *Auth) Register(r gin.IRouter) {
 		r.POST("/api/auth/login", a.login)
 	}
 	r.POST("/api/auth/login/mobile", a.loginByMobile) // 预留
-	r.POST("/api/auth/refresh", a.refresh)
+	r.POST("/api/auth/refresh-token", a.refresh)
 }
 
 // RegisterLogout 注册受保护路径（需 JWT 中间件前置）。
@@ -53,27 +53,17 @@ func (a *Auth) RegisterLogout(protected gin.IRouter) {
 }
 
 // login POST /api/auth/login
-//
-// Phase 2：DeviceID 注入：
-//   - 优先取请求头 X-Device-ID（前端用 localStorage / 一键登录 SDK 生成的 UUID）
-//   - 兜底取请求体里的 device_id（兼容老调用方）
-//   - 两者都为空时 token 不绑定 deviceID（中间件跳过设备校验）
 func (a *Auth) login(c *gin.Context) {
 	var req dto.LoginReq
 	if err := a.v.Bind(c, &req); err != nil {
 		response.WriteErr(c, err)
 		return
 	}
-	deviceID := c.GetHeader("X-Device-ID")
-	if deviceID == "" {
-		deviceID = req.DeviceID
-	}
 	pair, err := a.svc.Login(c.Request.Context(), dto.LoginInput{
 		Username:  req.Username,
 		Password:  req.Password,
 		IP:        c.ClientIP(),
 		UserAgent: c.GetHeader("User-Agent"),
-		DeviceID:  deviceID,
 	})
 	if err != nil {
 		response.WriteErr(c, err)

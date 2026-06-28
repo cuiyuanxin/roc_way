@@ -395,15 +395,13 @@ func AccessLog(log *zap.SugaredLogger) gin.HandlerFunc {
 	}
 }
 
-// JWT 解析 Authorization Bearer 并注入 user_id / jti / device_id 到 context。
+// JWT 解析 Authorization Bearer 并注入 user_id / jti 到 context。
 //
 // 校验链（按顺序，任一失败立即 abort）：
 //  1. Authorization header 存在且以 "Bearer " 开头；
 //  2. 验签通过（用 RS256 公钥，详见 [auth.Auth.Parse]）；
 //  3. claims.Kind == "access"（拒绝 refresh 错用）；
 //  4. jti 不在黑名单（已吊销的 token 拒绝）；
-//  5. **DeviceID 绑定校验**：如果 token claim 里有 deviceID，请求头 X-Device-ID 必须一致，
-//     防 token 泄露被异设备使用。
 func JWT(a *auth.Auth) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		h := c.GetHeader("Authorization")
@@ -430,18 +428,9 @@ func JWT(a *auth.Auth) gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-		// 设备指纹绑定校验：token claim 有 deviceID 则必须与请求头一致
-		if claims.DeviceID != "" {
-			reqDevice := c.GetHeader("X-Device-ID")
-			if reqDevice == "" || reqDevice != claims.DeviceID {
-				response.WriteErr(c, errcode.ErrTokenInvalid.WithMessage("device mismatch"))
-				c.Abort()
-				return
-			}
-		}
+
 		c.Set("user_id", claims.Subject)
 		c.Set("jti", claims.ID)
-		c.Set("device_id", claims.DeviceID)
 		c.Next()
 	}
 }

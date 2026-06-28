@@ -7,7 +7,6 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/cuiyuanxin/roc_way/internal/app/admin/domain"
 	"github.com/cuiyuanxin/roc_way/internal/app/admin/dto"
 	"github.com/cuiyuanxin/roc_way/internal/app/admin/model"
 	"github.com/cuiyuanxin/roc_way/internal/app/admin/repository"
@@ -18,9 +17,8 @@ import (
 
 // AuthService 认证应用服务。
 //
-// 不属于任何聚合，是「领域服务」（Domain Service）：
-//   - 跨聚合操作：user + auth + lock
-//   - 编排密码校验 + 锁定检查 + token 签发 + 登录日志入库
+// 跨聚合操作：user + auth + lock
+// 编排密码校验 + 锁定检查 + token 签发 + 登录日志入库
 type AuthService struct {
 	repo      repository.UserRepository // 直接引用以使用 FindByUsername
 	tokens    *auth.Auth
@@ -72,19 +70,19 @@ func (s *AuthService) Login(ctx context.Context, in dto.LoginInput) (*auth.Token
 	if lock.Active() {
 		event.Status = model.LoginStatusLockedAttempt
 		event.Reason = "account_locked_short"
-		if lock.Level == domain.LockLong {
+		if lock.Level == LockLong {
 			event.Reason = "account_locked_long"
 		}
 		s.loginLogs.RecordLogin(ctx, event)
 
 		// 长锁到底（不再累加计数、不再升级），直接拦截。
-		if lock.Level == domain.LockLong {
+		if lock.Level == LockLong {
 			return nil, errcode.ErrAccountLocked
 		}
 
 		// 短锁期间继续失败：仍要累加 count，便于达到 long 阈值时升级到 24h 长锁。
 		level := s.locks.RecordFailure(ctx, username, in.IP)
-		if level == domain.LockLong || level == domain.LockShort {
+		if level == LockLong || level == LockShort {
 			return nil, errcode.ErrAccountLocked
 		}
 		return nil, errcode.ErrAccountLocked
@@ -111,15 +109,15 @@ func (s *AuthService) Login(ctx context.Context, in dto.LoginInput) (*auth.Token
 		event.Reason = "password_mismatch"
 		s.loginLogs.RecordLogin(ctx, event)
 		// 密码错时如果新触发了锁定，优先返回锁定错误
-		if level == domain.LockShort || level == domain.LockLong {
+		if level == LockShort || level == LockLong {
 			return nil, errcode.ErrAccountLocked
 		}
 		return nil, errcode.ErrPasswordMismatched.WithMessage("密码错误")
 	}
 
-	// 4. 成功：清失败计数 + 签发 token（绑定 deviceID） + 写日志
+	// 4. 成功：清失败计数 + 签发 token + 写日志
 	s.locks.ClearFailures(ctx, username)
-	pair, err := s.tokens.IssueWithDevice(strconv.FormatUint(uint64(u.ID), 10), in.DeviceID)
+	pair, err := s.tokens.Issue(strconv.FormatUint(uint64(u.ID), 10))
 	if err != nil {
 		// token 签发失败不写 success，但仍要记录失败
 		event.Status = model.LoginStatusFailure

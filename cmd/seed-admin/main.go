@@ -119,7 +119,7 @@ func upsertAdmin(ctx context.Context, gdb *gorm.DB, username, email, name, hash 
 	u := &model.User{
 		Username: username,
 		Email:    email,
-		Name:     name,
+		NickName: name,
 		Password: hash,
 	}
 	if err := gdb.WithContext(ctx).Create(u).Error; err != nil {

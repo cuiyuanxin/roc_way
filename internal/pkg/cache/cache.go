@@ -18,6 +18,12 @@ type Client struct {
 	prefix string
 }
 
+// ErrNil key 不存在哨兵。
+//
+// 用途：调用方用 errors.Is(err, cache.ErrNil) 判别"key 不存在"和"真错误"，
+// 避免直接 import go-redis 暴露内部类型。
+var ErrNil = errors.New("cache: key not found")
+
 // New 创建缓存客户端。
 //
 // **启动期不强依赖 Redis**：若 Ping 失败仅打 warn 日志、仍返回可用 Client。
@@ -59,8 +65,43 @@ func (c *Client) Set(ctx context.Context, key string, value any, ttl time.Durati
 }
 
 // Get 读取字符串值。
+//
+// key 不存在时返 ErrNil（包装 redis.Nil），调用方用 errors.Is(err, cache.ErrNil) 判别。
+// 其它错误原样上抛。
 func (c *Client) Get(ctx context.Context, key string) (string, error) {
-	return c.rdb.Get(ctx, c.k(key)).Result()
+	v, err := c.rdb.Get(ctx, c.k(key)).Result()
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return "", ErrNil
+		}
+		return "", err
+	}
+	return v, nil
+}
+
+// GetWithTTL 读取字符串值 + 剩余 TTL。
+//
+// 用途：登录锁定状态查询——需要知道「锁的过期时间」决定是否仍生效，
+// 一次 RTT 拿 (value, ttl) 比两次 GET 高效。
+//
+// 返回：
+//   - (val, ttl, nil)   key 存在
+//   - ("", 0, ErrNil)   key 不存在（TTL = 0）
+//   - ("", 0, err)      其它错误
+func (c *Client) GetWithTTL(ctx context.Context, key string) (string, time.Duration, error) {
+	v, err := c.rdb.Get(ctx, c.k(key)).Result()
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return "", 0, ErrNil
+		}
+		return "", 0, err
+	}
+	ttl, err := c.rdb.TTL(ctx, c.k(key)).Result()
+	if err != nil {
+		// 取 TTL 失败：仍返 value，TTL 留 0 让调用方走 DB 兜底更安全
+		return v, 0, nil
+	}
+	return v, ttl, nil
 }
 
 // Del 删除一个或多个键。

@@ -9,7 +9,6 @@
 //   - AccessToken TTL 短（默认 2h）+ RefreshToken TTL 中（默认 7d）
 //   - Refresh Token Rotation：每次 refresh 换新一对，旧 refresh 立即进黑名单
 //   - 黑名单（Redis）按 jti 维度，可吊销单 token
-//   - DeviceID 绑定：登录时把设备指纹写入 claims，中间件校验 X-Device-ID
 package auth
 
 import (
@@ -188,8 +187,7 @@ func printSecretBanner(log *zap.SugaredLogger, source secretSource, length int, 
 
 // Claims 自定义 JWT 声明。
 type Claims struct {
-	Kind     string `json:"kind"`      // "access" | "refresh"
-	DeviceID string `json:"device_id"` // 设备指纹（登录时绑定，中间件校验）
+	Kind string `json:"kind"` // "access" | "refresh"
 	jwt.RegisteredClaims
 }
 
@@ -201,21 +199,13 @@ type TokenPair struct {
 	RefreshExp int64  `json:"refresh_exp"`
 }
 
-// Issue 签发一对 token（不绑定 device id，向后兼容）。
+// Issue 签发一对 token。
 func (a *Auth) Issue(subject string) (*TokenPair, error) {
-	return a.IssueWithDevice(subject, "")
-}
-
-// IssueWithDevice 签发一对 token，并把 deviceID 写入 claims。
-//
-// deviceID 为空时跳过绑定（适用于后台任务 / 系统调用）；
-// 中间件在校验时如果 token claim 里有 deviceID 而请求头没有，会拒绝。
-func (a *Auth) IssueWithDevice(subject, deviceID string) (*TokenPair, error) {
-	access, accessExp, err := a.sign(subject, "access", a.accessTTL, deviceID)
+	access, accessExp, err := a.sign(subject, "access", a.accessTTL)
 	if err != nil {
 		return nil, err
 	}
-	refresh, refreshExp, err := a.sign(subject, "refresh", a.refreshTTL, deviceID)
+	refresh, refreshExp, err := a.sign(subject, "refresh", a.refreshTTL)
 	if err != nil {
 		return nil, err
 	}
@@ -233,7 +223,6 @@ func (a *Auth) IssueWithDevice(subject, deviceID string) (*TokenPair, error) {
 //  2. 断言 claims.Kind == "refresh"（拒绝 access 错用）；
 //  3. 检查 jti 是否在黑名单；
 //  4. 旧 refresh jti 写入黑名单（防止重放）；
-//  5. 签发新一对 token（继承 device_id）。
 func (a *Auth) Refresh(ctx context.Context, refreshToken string) (*TokenPair, error) {
 	claims, err := a.Parse(refreshToken)
 	if err != nil {
@@ -250,12 +239,12 @@ func (a *Auth) Refresh(ctx context.Context, refreshToken string) (*TokenPair, er
 	if ttl > 0 {
 		_ = a.Revoke(ctx, claims.ID, ttl)
 	}
-	// 继承 deviceID
-	return a.IssueWithDevice(claims.Subject, claims.DeviceID)
+
+	return a.Issue(claims.Subject)
 }
 
 // sign 用 HS256 签发 token。
-func (a *Auth) sign(subject, kind string, ttl time.Duration, deviceID string) (string, time.Time, error) {
+func (a *Auth) sign(subject, kind string, ttl time.Duration) (string, time.Time, error) {
 	now := time.Now()
 	exp := now.Add(ttl)
 	jti, err := randHex(16)
@@ -263,8 +252,7 @@ func (a *Auth) sign(subject, kind string, ttl time.Duration, deviceID string) (s
 		return "", time.Time{}, err
 	}
 	claims := Claims{
-		Kind:     kind,
-		DeviceID: deviceID,
+		Kind: kind,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    a.issuer,
 			Subject:   subject,

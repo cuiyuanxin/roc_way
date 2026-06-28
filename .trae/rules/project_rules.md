@@ -108,12 +108,17 @@
     - 2026-06-23：引入 `github.com/air-verse/air` 作为开发期热启动工具。配置：根目录 `.air.toml`；入口：`make install-air` + `make dev`；安装脚本：`scripts/install-air.sh`（Linux/Mac 备用）。**air 是开发工具，不写入 `go.mod`**，通过 `go install` 装到 `$(go env GOPATH)/bin`。Windows 因 fsnotify 不可靠，配置已开 `poll = true`。
     - 2026-06-23：air 配置升级为**三段式跨平台**——`.air.toml` 同时声明 `[build.windows] / [build.darwin] / [build.linux]` 三段，air 自动按 `runtime.GOOS` 选择对应 cmd / bin / full_bin；Makefile 用 `go env GOHOSTOS` 检测平台并自动选择 `air.exe` 或 `air`；新增 `scripts/install-air.ps1` 作为 Windows PowerShell 安装入口。Windows 下用 `cmd /C "set X=Y && prog"` 包装环境变量赋值（PowerShell 不支持 `KEY=VAL ./prog` 语法），编译产物必须 `tmp\main.exe`。
     - 2026-06-23：admin 应用执行 DDD 轻量分层重构——新增 `domain/user/`（聚合根 User + Repository 接口）、`application/`（UserService / AuthService）、`infrastructure/repository/`（GORM 仓储实现）、`infrastructure/password/`（bcrypt 实现）；`controller/` 改为薄层（只解析请求、调 service、写响应）；`model/` 改为纯 GORM 映射。Controller 不再直接操作 GORM，业务逻辑完全收敛到 application 层。
-    - 2026-06-24：admin 应用执行 **Go 简洁命名 + 基础目录平铺** 的 DDD 重构——`controller/` → `handler/`、`application/` → `service/`、删除 `infrastructure/`、删除 `domain/user/` 嵌套；同时新增 `dto/` 包承载跨层入参 POJO。最终每个应用 5 个平铺基础目录：`domain/`、`repository/`、`service/`、`handler/`、`dto/`（外加 `model/` 持久化映射、`app.go` 组装层）。规则详见第 14 条。
+    - 2026-06-24：admin应用执行 **Go 简洁命名 + 基础目录平铺** 的 DDD 重构——`controller/` → `handler/`、`application/` → `service/`、删除 `infrastructure/`、删除 `domain/user/` 嵌套；同时新增 `dto/` 包承载跨层入参 POJO。最终每个应用 4 个平铺基础目录：`repository/`、`service/`、`handler/`、`dto/`（外加 `model/` 持久化映射、`app.go` 组装层）。规则详见第 14 条。
     - 2026-06-24：admin 应用执行 **Go 简洁标识符命名** 收尾——文件名 `user_repo_gorm.go` / `user_repo_iface.go` → `user_gorm.go` / `user_iface.go`（**禁止**下划线分词）；包级函数 `logInfow` / `logWarnw` → `infow` / `warnw`（**禁止**包内调用时还要写包名）；未导出实现 `userRepository` → `userRepo`（**禁止** Java 风格的 `*Impl` / `*Interface` 后缀）。规则详见第 15 条。
     - 2026-06-24：修复 dto binding tag `fieldmatch` 报 `Undefined validation function` 的 runtime 报错——`internal/pkg/validator.New()` 改为**复用 gin 全局 validator engine**（之前新建实例导致 dto binding tag 走旧 engine、规则不共享）；导出 `validator.FieldMatch` 供注册；同时删除冗余的 `Validator.mu` 锁（validator/v10 内部已并发安全）。新增第 16 条（validator 复用 + 禁止自加锁）+ 第 17 条（禁止滥用 `init()`）。
     - 2026-06-25：**统一 HTTP 响应工具收敛到 `internal/pkg/response`**——新建 `internal/pkg/response/response.go`，把原 `api/response/` 的 `Response` / `ErrorResponse` 结构与构造器、`internal/app/admin/handler/response.go` 的 `WriteOK` / `WriteErr` 翻译函数**全部合并**到一个包；**删除** `api/response/` 目录与 `internal/app/admin/handler/response.go`；`middleware`（RateLimit / JWT / CSRF / Timeout）与 `auth.Enforcer` 内 7 处重复的 `c.AbortWithStatusJSON(...response.NewErrorResponse(...))` 模板**全部改用 `response.WriteErr`**，handler / middleware / auth 三层共用同一套「err → HTTP 响应」翻译。**避免循环依赖**的关键：`internal/pkg/response` 内部 `getRequestID` 直接 `c.Get("request_id")`，**禁止** import `internal/pkg/middleware`（否则 `middleware → response → middleware` 闭环）。新增第 18 条（统一响应规则 + 目录归属）。
     - 2026-06-25：**登录安全加固**——补齐 4 项能力：①路由级限流（`/healthz` 与 `/api/auth/login` 各 20次/分钟/IP，`RateLimitOptions` 新增 `Window/Limit` 字段，Redis INCR+EXPIRE 固定窗口算法）；②登录失败锁定（5次连败锁 15min / 10次连败锁 24h，按 username 粒度）；③Redis + MySQL 双存储（Redis 主存 / MySQL 兜底，业务不阻断）；④多登录方式预留（`/api/auth/login/mobile` 路由 + dto 占位 + service stub 返回 501）。新增包 `internal/pkg/notify`（Notifier 接口 + NoopNotifier）、`internal/pkg/janitor`（LoginAuditCleaner 后台清理 + 写入路径在线清理）；`model.User` 加 `Username` 字段（去 email uniqueIndex，需手动迁移）；`service.AuthService` 注入 `LockService` + `Notifier`。spec：[`.trae/specs/2026-06-25-login-security-design.md`](file:///d:/WWW/golangProject/roc_way/.trae/specs/2026-06-25-login-security-design.md)（**注意**：spec 放 `.trae/specs/`，**不**放 `docs/`，避免与对外文档混淆；与现有 `.trae/specs/build-roc-way-framework/` 同级）。新增第 19 条（路由级限流 + 锁定 + 通知约束）。
-- 目录布局：基于 [golang-standards/project-layout](https://github.com/golang-standards/project-layout) 社区标准布局
+    - 2026-06-26：**JWT 全套安全特性落地**（HS256 + Refresh Token Rotation + DeviceID 绑定 + 黑名单吊销）。`internal/pkg/auth` 新增 `IssueWithDevice` / `Refresh` / `Revoke` / `IsRevoked`；`config.yaml` 的 `auth.jwt_secret` 加 secret 三级回退（env → yaml → 自动生成到 `configs/.jwt_secret`）；release 模式必须显式提供 secret，否则启动 panic；dev 模式自动生成 + chmod 600。`model.LoginAudit` 加 `UserID` 索引 + `IP` / `UserAgent` 字段；`dto.LoginInput` 加 `UserAgent` / `DeviceID`；`dto.LoginReq` 加 `DeviceID` 字段；`handler.auth.login` 注入 `UserAgent` / `DeviceID`；`service.AuthService` 接 `IssueWithDevice` + `Refresh` + `Logout`（双 jti 吊销）。新增第 20 条（HS256 + secret 三级回退 + Token 旋转 + 黑名单 + DeviceID）。
+    - 2026-06-27：**锁定升级语义实现**（用户报告「短锁 5 次后第 10 次必须升级 24h 长锁」）。`service/auth.go` 第 71-91 行分流：长锁到底不累加；**短锁期间继续失败仍调 `LockService.RecordFailure` 累加 count**；`LockService.RecordFailure` 新增升级分支（count ≥ long_threshold 时**强制覆盖**写 long lock）。`auth_login_logs`（`LoginLogService`）全状态入库：成功 / 失败 / 锁定拦截 / 参数错误 / token 签发失败——5 个出口全记录。
+    - 2026-06-27：**删除 `domain/` 包**（你 6 步改造）。`domain/user.go` 行为方法（`NewUser` / `SetName` / `SetPasswordHash`）+ `usernameRe` / `emailRe` 校验**全部删除**；`dto` 的 binding tag + 自定义 validator 接管入参校验（**不**在 dto 上加 `Validate()` 方法，规则集中不重复）；`model.User` 改为纯 GORM 映射（无行为方法）；`service.UserService.Register / GetByID / List / UpdateName` 改为返 `*dto.UserInfo` / `[]dto.UserInfo`（handler 不再 `toUserInfo` 映射），`FindByUsername` **保留** `*model.User`（登录流程要读 `Password` 字段做 bcrypt 比对）；`LockLevel` / `AccountLock` 运行期状态**从 model 移出**放进 `service/login_audit.go` 末尾（**不**是 `service/lock.go`）；删 `service.NewLockPolicyFromConfig` adapter，`app.go` 直接用 `service.LockPolicy{...}` 字面量构造。**修改 10 个文件**：`model/user.go` / `repository/user.go` / `dto/user.go` / `service/user.go` / `service/auth.go` / `service/login_audit.go` / `handler/user.go` / `app.go` / `cmd/seed-admin/main.go` + 删 `model/lock.go` / `domain/` 整个目录。`go build ./internal/... ./cmd/...` 0 errors，`go test ./internal/... ./cmd/...` 全部 ok。
+    - 2026-06-27：**Makefile 新增 `make certs` 跨平台 HTTPS 证书生成**。新增 `scripts/install-mkcert.{sh,ps1}`（Linux/macOS 优先 brew/apt/dnf/apk，Windows 优先 choco/scoop/winget，**全部兜底** `go install filippo.io/mkcert@latest`）；Makefile 用 `$(GO) env GOHOSTOS` 检测平台分流；`make certs` 强制 `where mkcert` / `command -v mkcert` 解析**绝对路径**调用（避免 winget 别名在 make sh 里失效）。`.gitignore` 忽略 `configs/certs/server.{crt,key}`；目录用 `.gitkeep` 保留。`/healthz` / `/api/auth/login` 路由级限流 key 前缀由 `RouteLimitConfig.KeyPrefix` 注入。**关键 PowerShell 坑**：脚本必须以 **UTF-8 with BOM + CRLF** 保存，否则 PS 7.5 在 `if/elseif/else` 链上解析失败（"意外的标记 `}`"）——这是已知生产环境多 CI 镜像踩过的坑。
+    - 2026-06-27：**恢复 Redis 主存 + DB 兜底**（之前 6 步改造误删了 Redis 加速层）。`internal/app/admin/repository/audit.go` 改造：①加 `cache` / `ttl` / `log` 字段，构造时由 `app.go` 注入 `d.Cache` + `repository.LockTTL{Short, Long}`；②`RecordFailure` 改为**先 DB 事务 → 后 Redis IncrWithTTL**（24h TTL）；③`RecordLock` **先 DB 写 → 后 Redis SetNX 锁 key**（TTL = DB expires_at - now）；④`LatestActiveLock` **先 Redis GetWithTTL 长/短锁 key → miss fallback DB → DB 结果回填 Redis**；⑤`RecentFailuresCount` **先 Redis GET `auth:fail:{user}` → miss fallback DB Count → 回填 Redis**；⑥`ClearFailures` **先 DB 删 → 再 Redis Del**。`cache.Client` 加 `ErrNil` 哨兵（包装 `redis.Nil`）+ `GetWithTTL(value, ttl, err)` 一次 RTT 拿 value+TTL。`app.go` `NewLoginAuditRepository` 签名改为 `(db, cache, ttl, log)`，调用方传 `d.Cache` / `d.Log.Security()`。**service 不直接 import cache**——所有 cache 调用在 `loginAuditRepo` 内封装，service 调 `repo.X` 不感知 cache 存在。
+  - 目录布局：基于 [golang-standards/project-layout](https://github.com/golang-standards/project-layout) 社区标准布局
 
 ## 目录用途对照表
 
@@ -201,26 +206,27 @@
     - **Makefile 跨平台检测**：**禁止**用 `uname`（Windows 上不可靠），用 `$(GO) env GOHOSTOS` 判断。
     - 临时产物（`/tmp/`、`/air_errors.log`）由 `.gitignore` 屏蔽，**禁止**提交。
 14. **DDD 分层（Go 简洁命名，按基础目录平铺）**：
-    - 业务应用统一放在 `internal/app/<app>/` 下，**采用 5 个基础目录**（每个都是平铺一层，不再嵌套子包）：
+    - 业务应用统一放在 `internal/app/<app>/` 下，**采用 4 个基础目录**（每个都是平铺一层，不再嵌套子包）：
       | 目录 | 职责 | 放什么 | 典型文件 |
       | --- | --- | --- | --- |
-      | `domain/` | 领域层 | 聚合根 + 领域错误 + 领域服务接口（纯 Go，无任何框架依赖） | `user.go`、`user_test.go` |
-      | `repository/` | 仓储层 | 仓储接口 + 持久化实现（GORM / 内存 / 缓存等），**接口和实现可同包** | `user_iface.go`、`user_gorm.go` |
-      | `service/` | 应用服务层 | 业务编排用例（注册、登录、改昵称…），接收 dto 输入、返回 domain 实体 | `user.go`、`auth.go`、`bcrypt.go` |
-      | `handler/` | HTTP 表现层 | 路由注册 + 请求解析 + 调用 service + 写响应；**薄**，禁止业务逻辑 | `user.go`、`auth.go`、`health.go` |
-      | `dto/` | 跨层 POJO | 跨层传递的纯数据入参/出参，**禁止**放 gin binding / ORM 标签 | `user.go` |
+      | `dto/` | 跨层 POJO | 跨层传递的纯数据入参/出参 + 校验（binding tag / 自定义 validator），**禁止**放业务逻辑 | `user.go`、`rules.go` |
+      | `repository/` | 仓储层 | 仓储接口 + 持久化实现（GORM / 内存 / 缓存等），**接口和实现可同包** | `user.go`、`audit.go` |
+      | `service/` | 应用服务层 | 业务编排用例（注册、登录、改昵称…），接收 dto 输入、**根据业务**决定返 dto 出参或 model 实体；**不放领域行为** | `user.go`、`auth.go`、`login_audit.go` |
+      | `handler/` | HTTP 表现层 | 路由注册 + 请求解析 + 调 service + 写响应；**薄**，禁止业务逻辑 | `user.go`、`auth.go`、`health.go` |
+    - **model/ 单独看待**：纯 GORM 持久化映射（`User` / `LoginAudit` / `AuthLoginLog`），**不带行为方法**；业务校验交给 `dto`（binding tag + 自定义 validator）；运行期状态（如 `LockLevel` / `AccountLock`）放进 `service/`，不污染 model。
     - **禁止** Java 风格嵌套：
-      - `domain/user/entity.go`、`domain/user/repository.go` ← **不允许**（合并到 `domain/user.go`）
+      - `domain/...` ← **不允许**（model + service + dto 共同承担原来的领域层职责，**没有独立 domain 包**）
       - `application/user_service.go` ← **不允许**（用 `service/user.go`）
       - `controller/user_controller.go` ← **不允许**（用 `handler/user.go`）
       - `infrastructure/persistence/...` ← **不允许**（用 `repository/...`）
       - `interfaces/dto/...` ← **不允许**（用 `dto/...`）
-    - **基础目录必须存在**：即使当前只有一个聚合也要保留这 5 个目录（如 `dto` 当前只有入参，仍要建 `dto/` 包），**禁止**把所有逻辑塞到 `app.go` 单文件。
+    - **基础目录必须存在**：即使当前只有一个聚合也要保留这 4 个目录（如 `dto` 当前只有入参，仍要建 `dto/` 包），**禁止**把所有逻辑塞到 `app.go` 单文件。
     - **dto 设计原则**：
-      - dto 放「跨层传递的纯数据」，无方法、无 `binding` / `gorm` / `json` 以外的标签。
-      - HTTP 请求体里带 `binding:"required,email"` 的 `registerReq`、`loginReq` **留在 handler 包内**（避免 dto 反向依赖 gin）。
-      - service 层方法签名直接接收 `dto.XxxInput`，handler 用 `dto.XxxInput{...}` 构造入参。
-    - **依赖方向**：handler → service → domain ← repository；dto 可被 handler、service、test 引用，但 dto 本身**禁止**反向依赖它们中的任何一个。
+      - dto 放「跨层传递的纯数据」，**有 binding tag + 自定义 validator 做入参校验**（如 `dto.LoginReq` 的 `binding:"required,min=5,max=24,fieldmatch=..."`）。
+      - **不**在 dto 上加 `Validate()` 方法（已有 binding + 自定义 validator 兜底，重复等于把规则双写一遍，违反 0.1 规则「避免过度工程」）。
+      - **出参 dto 由 service 决定**——service 直接返 `*dto.UserInfo` / `[]dto.UserInfo`（handler 拿到后 WriteOK 透传）；但 service 内部使用的 `*model.User`（如 AuthService 登录流程要读 `Password` 字段做 bcrypt 比对）**不**强行包成 dto。
+      - HTTP 请求体里带 `binding:"required,email"` 的 `registerReq` / `loginReq` **留在 handler 包内**（避免 dto 反向依赖 gin）。
+    - **依赖方向**：handler → service → model ← repository；dto 可被 handler、service、test 引用，但 dto 本身**禁止**反向依赖它们中的任何一个。
 15. **Go 简洁命名约束（`.go` 文件 / 标识符）**：
     - **文件名**：**禁止**下划线分词（`user_repo_gorm.go`、`http_response.go` 这种**不允许**），统一用 Go 社区短文件名：
       | 含义 | 推荐 | 禁止 |
@@ -303,36 +309,51 @@
 19. **登录安全（路由级限流 + 失败锁定 + 通知）**：
     - **双层限流**（机器承载力 + 接口级防刷）：
       - 全局限流保留 RPS/Burst 令牌桶语义（`e.Use(globalLimitMw)`，所有请求计数）。
-      - 路由级限流**新增** `Window + Limit` 字段（`Window time.Duration, Limit int`），走 Redis `INCR + EXPIRE` 固定窗口；按 `RouteLimits` 配置在路由处挂载（`e.GET(path, routeLimitMw, handler)`）。
+      - 路由级限流走 Redis `INCR + EXPIRE` 固定窗口；按 `RouteLimits` 配置在路由处挂载（`e.GET(path, routeLimitMw, handler)`）。
       - **顺序强制**：全局先、路由后——超全局配额直接拦截，不浪费路由级 INCR 计数。
       - 全局 key = `rl:global:{ip}`；路由级 key = `rl:route:{KeyPrefix}:{ip}`（KeyPrefix 由 `RouteLimitConfig.KeyPrefix` 注入）。
     - **失败锁定**（按 username 粒度）：
       - 阈值：5 次连败锁 15 分钟（`LockShort`），10 次连败锁 24 小时（`LockLong`）。
+      - **升级语义**：第 5 次失败写入 `lock_short`（15min 短锁）；短锁期间继续失败仍累加 count；**count ≥ 10 时升级**到 `lock_long`（24h 长锁，**强制覆盖** Redis 短锁 key + DB 写新行）。
       - **成功登录重置失败计数**（Redis Del + DB delete failure 记录）；**不删除 lock 记录**（防攻击者试探到 4 次后故意输对 1 次再继续）。
       - 锁定到期 → 自动解锁（Redis TTL 自然过期；DB 记录由 janitor 清理）。
-    - **Redis + MySQL 双存储**：
-      - Redis 主存（key 前缀 `auth:fail:` / `auth:lock:short:` / `auth:lock:long:`）。
-      - MySQL 兜底：`login_audits` 单表（`event_type` ∈ {`failure`, `lock_short`, `lock_long`}，`occurred_at` 索引）。
-      - Redis 故障降级：读失败查 DB；写失败写 DB + zap warn；DB 也失败 → zap error + **业务不阻断**。
-      - **禁止**在 service 层直接调 cache + DB；双写逻辑封装在 `service/lock.go`（`LockService`）。
+    - **DB 主源 + Redis 加速缓存**（**增删改**查遵循「先 DB → 再 Redis」）：
+      - **DB 永远是真源**（MySQL `login_audits` 表）；Redis 故障时业务**不阻断**，自动降级走 DB 兜底。
+      - 增（`RecordFailure` / `RecordLock`）：**先写 DB（事务）→ 成功后写/更新 Redis**；Redis 失败仅 zap warn，**不**回滚 DB（DB 已是真源）。
+      - 删（`ClearFailures` 登录成功时）：**先 DB 删 failure 记录 → 再 Redis Del** `auth:fail:{user}`。
+      - 改（无显式 update；同 level 短锁不重写；短→长升级：先 Del 短锁 Redis key + DB 写 long 行 → 写 Redis 长锁 key）。
+      - 读（`LatestActiveLock` / `RecentFailuresCount`）：**先查 Redis → miss / 失败 fallback DB → DB 结果回填 Redis**。
+      - Redis 启动期 Ping 失败仅 zap warn、**不**返回 error（项目 [cache.go#L31-47](file:///d:/WWW/golangProject/roc_way/internal/pkg/cache/cache.go#L31-L47) 已实现）；运行期调用失败按 errors.Is(err, cache.ErrNil) 区分"key 不存在"和"真错误"。
+      - **禁止**在 service 层直接调 cache + DB；双写逻辑封装在 `repository/audit.go`（`loginAuditRepo`）。
+    - **Redis key 命名**（`cache.Client` 自动加 `cfg.Prefix` 前缀后写入 Redis）：
+      - `auth:fail:{username}` — 失败计数（`IncrWithTTL` 24h TTL，登录窗口）
+      - `auth:lock:short:{username}` — 短锁存在标记（`SetNX` + TTL = DB lock_short 的 expires_at）
+      - `auth:lock:long:{username}` — 长锁存在标记（`SetNX` + TTL = DB lock_long 的 expires_at）
+    - **DB 写失败** → zap error + 业务不阻断（写入路径已 commit 失败不再走 Redis）。
+    - **DB schema**：通过 `rocway-cli migrate` 子命令执行 `model.Migrate(db)`，`login_audits` 单表（`event_type` ∈ {`failure`, `lock_short`, `lock_long`}，`occurred_at` 索引；2026-06-27 加 `failed_count` / `expires_at` / `ip` / `user_id` 字段）。
+    - **LockService 位置**：`internal/app/admin/service/login_audit.go`（**不**是 `service/lock.go`）。
+      - 运行期状态类型 `LockLevel` / `AccountLock` **也**放这个文件（同包内可见，**不**放 `model/`）。
+      - **service 不直接 import cache**——所有 cache 调用在 `loginAuditRepo` 内封装，service 仅通过 `repo.RecordFailure` / `RecordLock` / `LatestActiveLock` / `RecentFailuresCount` / `ClearFailures` 五个方法操作。
     - **Notifier 通知**（`internal/pkg/notify`）：
       - 接口签名强制：**`Notify(ctx, Event)` 不返回 error、不 panic**——实现体内部 swallow 错误并 zap 日志，避免「推送系统故障拖垮登录」。
       - 默认实现 `NoopNotifier`：仅 `logger.Security()` channel 输出（`Warnw "security_event"`）。
       - 未来接邮件 / 钉钉 / IM 时**新增实现体**，业务代码**零改动**。
-    - **janitor 后台清理**：
-      - `internal/pkg/janitor.LoginAuditCleaner`：`time.NewTicker(24*time.Hour)` 触发 `DELETE WHERE occurred_at < now() - 24h`。
+    - **janitor 后台清理（重要：登录日志永不自动删）**：
+      - `internal/pkg/janitor.LoginAuditCleaner`：`time.NewTicker(24*time.Hour)` 触发 `DELETE WHERE occurred_at < now() - 24h`，**只清理 `login_audits`（锁定审计）**。
+      - **`auth_login_logs`（登录日志）由未来的「登录日志管理」模块处理，本项目 janitor 永远不动它**——`NewLoginLogJanitor` 故意不实现，避免误删用户行为数据。
       - `app.go` 启动 goroutine；`App.Close()` 调 cancel，**禁止** goroutine 泄漏。
       - **写入路径在线清理**：每次 `RecordFailure` 后附 `DELETE ... LIMIT 1000`，避免 janitor 单次 DELETE 过多行（DB 长事务）。
     - **username 字段**：
-      - `model.User` 加 `Username string gorm:"size:64;uniqueIndex"`，email 字段**去 uniqueIndex**（保留兼容索引）。
+      - `model.User` 含 `Username` / `Email` / `NickName` / `Avatar` 4 个用户字段（**NickName / Avatar** 由 2026-06-26 加）。
+      - `model.User.Username` 加 `gorm:"size:64;uniqueIndex"`；email 字段**无 uniqueIndex**（保留兼容索引）。
       - **生产环境**加 uniqueIndex **必须手动迁移**：`ALTER TABLE users ADD COLUMN username ...` → `UPDATE SET username = CONCAT('user_', id)` → `ALTER TABLE ... ADD UNIQUE INDEX`；**禁止**依赖 GORM AutoMigrate 加 uniqueIndex（可能锁表）。
-      - `domain.User.Validate()` 加 username 校验（5-24 位字母数字下划线短横线）。
-      - `repository.UserRepository` 加 `FindByUsername`；`FindByEmail` 保留兼容。
-      - `dto.LoginInput` 字段 `Email → Username`，新增 `IP string`（handler 注入 `c.ClientIP()`）。
+      - username 校验在 `dto.LoginReq` 的 binding tag 里（**不**在 `domain.User.Validate()`——`domain/` 已删）：`binding:"required,min=5,max=24,fieldmatch=^[a-zA-Z0-9_-]+$"`。
+      - `repository.UserRepository` 有 `FindByUsername`；`FindByEmail` 保留兼容。
+      - `dto.LoginInput` 字段：`Username` + `Password` + `IP string`（handler 注入 `c.ClientIP()`）+ `UserAgent string`（handler 注入 `c.GetHeader("User-Agent")`）。
     - **多登录方式预留**：
       - `POST /api/auth/login`：**真正实现** username + password 登录。
-      - `POST /api/auth/login/mobile`：**handler 路由 + dto 占位 + service stub**，统一返回 `errcode.ErrNotImplemented`（HTTPStatus 501）。
-      - 未来接手机号 + 短信验证码时**只填 service stub**，路由 / dto 已就位。
+      - `POST /api/auth/login/mobile`：**handler 路由 + service stub**，统一返回 `errcode.ErrNotImplemented`（HTTPStatus 501）。
+      - 未来接手机号 + 短信验证码时**只填 service stub**，路由已就位。
     - **新增错误码**（`internal/pkg/errcode`）：
       - `ErrAccountLocked = Code{2005, "账号已锁定，请稍后再试", 423}`（HTTP 423 Locked）
       - `ErrNotImplemented = Code{2006, "功能未实现", 501}`

@@ -4,6 +4,8 @@
 //   - dto 只放「跨层传递的纯数据」，不含方法、不含 binding 标签
 //   - gin binding 标签留在 handler 层的请求结构上（避免 dto 反向依赖 gin）
 //   - service 层方法签名直接接收 dto，避免 service 暴露过多入参类型
+//   - **入参校验**（Validate 方法）放在 dto 上：handler 收到请求 → 调 dto.Validate()
+//     校验失败直接 response.WriteErr 返回，避免 service 重复校验。
 package dto
 
 // LoginReq 登录请求参数。
@@ -11,13 +13,20 @@ package dto
 // 登录场景不重新校验密码强度（注册时已校验过），只校验非空。
 // 与 RegisterReq 区分：RegisterReq 的 Password 字段保留 `required,password` 触发完整规则链；
 // LoginReq 改为 `required`，避免旧密码 / 测试种子密码长度受 12-24 限制无法登录。
-//
-// Phase 2：加 DeviceID 字段（设备指纹），登录成功后绑定到 JWT claims，
-// 后续请求必须带 X-Device-ID 头才能通过中间件校验（防 token 泄露被异设备用）。
 type LoginReq struct {
 	Username string `json:"username"    binding:"required,min=5,max=24,fieldmatch=^[a-zA-Z0-9_-]+$:用户名为5-24位字母、数字、下划线、短横线"`
 	Password string `json:"password"    binding:"required"`
-	DeviceID string `json:"device_id"   binding:"omitempty,min=8,max=128"` // 设备指纹，UUID v4 风格，可选
+}
+
+// LoginInput 登录业务入参。
+//
+// Username 作为登录账号；IP / UserAgent 由 handler 从 c.ClientIP() / c.GetHeader("User-Agent") 注入，
+// 供 service 层写入 auth_login_logs 审计表。
+type LoginInput struct {
+	Username  string
+	Password  string
+	IP        string
+	UserAgent string
 }
 
 // RegisterReq 注册请求参数。
@@ -38,21 +47,6 @@ type RegisterInput struct {
 	Password string
 }
 
-// LoginInput 登录业务入参。
-//
-// Username 作为登录账号；IP / UserAgent 由 handler 从 c.ClientIP() / c.GetHeader("User-Agent") 注入，
-// 供 service 层写入 auth_login_logs 审计表。
-//
-// Phase 2：DeviceID 由 handler 从请求头 X-Device-ID（或 req.DeviceID 兜底）注入，
-// 用于绑定到 JWT claims。
-type LoginInput struct {
-	Username  string
-	Password  string
-	IP        string
-	UserAgent string
-	DeviceID  string
-}
-
 // UpdateNameInput 改昵称业务入参。
 type UpdateNameInput struct {
 	ID   uint
@@ -64,3 +58,17 @@ type ListInput struct {
 	Page     int
 	PageSize int
 }
+
+// UserInfo 当前登录用户个人信息出参。
+type UserInfo struct {
+	ID          uint     `json:"id"`
+	Username    string   `json:"username"`
+	Email       string   `json:"email"`
+	NickName    string   `json:"nickname"`
+	Avatar      string   `json:"avatar"`
+	Roles       []string `json:"roles"`
+	Permissions []string `json:"permissions"`
+}
+
+// ListUser 列表项出参（与 UserInfo 同字段，避免列表接口再次手写）。
+type ListUser = UserInfo
