@@ -81,6 +81,7 @@ func NewHub() *Hub {
 // 与 d.Cfg.Server.CORS.Origins 共享同一份配置：
 //   - 包含 "*"：放行所有 origin（仅在 AllowCredentials=false 时安全）；
 //   - 否则按精确匹配校验请求 Origin 头。
+//
 // 必须在 Run() 启动前调用；运行期变更需要重启 Hub。
 func (h *Hub) SetAllowedOrigins(origins []string) {
 	h.mu.Lock()

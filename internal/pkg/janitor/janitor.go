@@ -25,10 +25,10 @@ type CleanupFunc func(ctx context.Context, cutoff time.Time) (affected int64, er
 
 // Janitor 单个清理任务。
 type Janitor struct {
-	Name     string
-	Interval time.Duration
+	Name      string
+	Interval  time.Duration
 	Retention time.Duration // 数据保留时长（早于 now-Retention 的视为过期）
-	Cleanup  CleanupFunc
+	Cleanup   CleanupFunc
 }
 
 // Run 启动 janitor goroutine。

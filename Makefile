@@ -68,13 +68,18 @@ run: build
 	./$(BIN)/rocway
 
 test:
-	$(GO) test ./...
+	# 不使用 `./...`: 避免 `go test` 扫描 `.trae/skills/**/examples/`
+	# 等 Trae IDE 的 skill 自带示例(其中含占位 import `github.com/you/...`),
+	# 这些不是项目源码,但 `./...` 会全盘扫描。
+	$(GO) test ./cmd/... ./internal/... ./pkg/...
 
 vet:
-	$(GO) vet ./...
+	# 同 test: 显式列出项目源码顶层目录,跳过 `.trae/`。
+	$(GO) vet ./cmd/... ./internal/... ./pkg/...
 
 fmt:
-	$(GO) fmt ./...
+	# fmt 仅改项目源码,跳过 `.trae/skills/`(那是 IDE skill 资源)。
+	$(GO) fmt ./cmd/... ./internal/... ./pkg/...
 
 lint: vet fmt
 
