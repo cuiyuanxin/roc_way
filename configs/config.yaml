@@ -27,10 +27,10 @@ server:
 
 database:
   write:
-    host: "127.0.0.1"
-    port: 3306
-    user: "root"
-    password: "123456"
+    host: "mysql6.sqlpub.com" # 127.0.0.1
+    port: 3311
+    user: "rocway"
+    password: "RZYzRAdjG11fmAtj"
     dbname: "rocway"
   read:
     # - host: "127.0.0.1"
@@ -42,7 +42,7 @@ database:
   max_idle_conns: 10
 
 cache:
-  addr: "127.0.0.1:6379"
+  addr: "r-2zev4rtjaekfghkzwx.redis.rds.aliyuncs.com:6379"
   password: ""
   db: 0
   prefix: "rocway:"

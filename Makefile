@@ -40,7 +40,11 @@ help:
 	@echo "make dev            - run rocway with air hot reload"
 
 tidy:
-	$(GO) mod tidy
+	# `-e`: 容忍 .trae/skills/**/examples/ 等 skill 自带示例里
+	#       `github.com/you/myapp/cmd` 这类占位 import 解析失败 —— 这些是
+	#       reference 示例,不应该被当作项目源码扫描,但 Go 工具链会全盘扫。
+	#       主项目依赖仍按正常流程 tidy 完毕。
+	$(GO) mod tidy -e
 
 wire:
 	@if [ ! -x "$(WIRE)" ]; then $(GO) install github.com/google/wire/cmd/wire@latest; fi
